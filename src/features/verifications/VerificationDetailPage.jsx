@@ -90,13 +90,21 @@ const VerificationDetailPage = () => {
         );
     }
 
+    // Helper fallbacks between Firestore keys
+    const displayName = request.extractedName || request.userName || "Donor Verification Request";
+    const displayIdNumber = request.idNumber || request.ocrIdNumber || "N/A";
+    const displayDob = request.extractedBirthDate || request.ocrDob || request.birthDate || "N/A";
+    const displayFrontUrl = request.idPhotoUrl || request.govIdUrl;
+    const displayBackUrl = request.backIdPhotoUrl || request.backIdUrl;
+    const displaySelfieUrl = request.selfieUrl;
+
     return (
         <div className="space-y-6">
             {/* Navigation Header */}
             <div className="flex items-center justify-between">
                 <button
                     onClick={() => navigate("/verifications")}
-                    className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 font-medium"
+                    className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 font-medium cursor-pointer"
                 >
                     <LuArrowLeft size={18} />
                     <span>Back to List</span>
@@ -106,9 +114,9 @@ const VerificationDetailPage = () => {
 
             {/* User Overview */}
             <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-xs">
-                <h2 className="text-xl font-bold text-gray-900">{request.userName || "Donor Verification Request"}</h2>
-                <p className="text-xs text-gray-500">
-                    User ID: {request.userId} • Email: {request.userEmail}
+                <h2 className="text-xl font-bold text-gray-900">{displayName}</h2>
+                <p className="text-xs text-gray-500 mt-1">
+                    User ID: {request.userId} {request.userEmail ? `• Email: ${request.userEmail}` : ""}
                 </p>
             </div>
 
@@ -121,13 +129,33 @@ const VerificationDetailPage = () => {
                             <LuFileText className="text-[#D32F2F]" size={18} />
                             1. Government Identification Document
                         </h3>
-                        <div className="bg-gray-50 p-2 rounded-lg border border-gray-200">
-                            <img
-                                src={request.govIdUrl || "https://via.placeholder.com/600x380?text=Government+ID+Image"}
-                                alt="Government ID"
-                                className="w-full h-56 object-contain rounded-md bg-black/5"
-                            />
+
+                        {/* Front of ID */}
+                        <div>
+                            <p className="text-[11px] font-semibold text-gray-500 mb-1">Front</p>
+                            <div className="bg-gray-50 p-2 rounded-lg border border-gray-200">
+                                <img
+                                    src={displayFrontUrl || "https://via.placeholder.com/600x380?text=Government+ID+Front"}
+                                    alt="Government ID - Front"
+                                    className="w-full h-56 object-contain rounded-md bg-black/5"
+                                />
+                            </div>
                         </div>
+
+                        {/* Back of ID — only shown if uploaded */}
+                        {displayBackUrl && (
+                            <div>
+                                <p className="text-[11px] font-semibold text-gray-500 mb-1">Back</p>
+                                <div className="bg-gray-50 p-2 rounded-lg border border-gray-200">
+                                    <img
+                                        src={displayBackUrl}
+                                        alt="Government ID - Back"
+                                        className="w-full h-56 object-contain rounded-md bg-black/5"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
                         <div className="text-xs text-gray-500 flex justify-between">
                             <span>ID Type: <strong>{request.idType || "Philippine Gov ID"}</strong></span>
                             <span>Storage: Cloudinary</span>
@@ -141,7 +169,7 @@ const VerificationDetailPage = () => {
                         </h3>
                         <div className="bg-gray-50 p-2 rounded-lg border border-gray-200">
                             <img
-                                src={request.selfieUrl || "https://via.placeholder.com/400x400?text=Live+Selfie+Image"}
+                                src={displaySelfieUrl || "https://via.placeholder.com/400x400?text=Live+Selfie+Image"}
                                 alt="Live Selfie"
                                 className="w-full h-56 object-contain rounded-md bg-black/5"
                             />
@@ -161,19 +189,19 @@ const VerificationDetailPage = () => {
                             <div className="grid grid-cols-2 gap-3 text-xs bg-gray-50 p-3 rounded-lg border border-gray-100">
                                 <div>
                                     <span className="text-gray-500 block">Extracted Name:</span>
-                                    <span className="font-semibold text-gray-800">{request.ocrName || "N/A"}</span>
+                                    <span className="font-semibold text-gray-800">{displayName}</span>
                                 </div>
                                 <div>
                                     <span className="text-gray-500 block">ID Number:</span>
-                                    <span className="font-semibold text-gray-800">{request.ocrIdNumber || "N/A"}</span>
+                                    <span className="font-semibold text-gray-800">{displayIdNumber}</span>
                                 </div>
                                 <div>
                                     <span className="text-gray-500 block">Date of Birth:</span>
-                                    <span className="font-semibold text-gray-800">{request.ocrDob || "N/A"}</span>
+                                    <span className="font-semibold text-gray-800">{displayDob}</span>
                                 </div>
                                 <div>
-                                    <span className="text-gray-500 block">Address Matched:</span>
-                                    <span className="font-semibold text-gray-800">{request.ocrAddress ? "Yes" : "N/A"}</span>
+                                    <span className="text-gray-500 block">Extracted Gender:</span>
+                                    <span className="font-semibold text-gray-800">{request.extractedGender || "N/A"}</span>
                                 </div>
                             </div>
                         </div>
@@ -188,13 +216,13 @@ const VerificationDetailPage = () => {
                                 <div>
                                     <span className="text-gray-500 block">Match Confidence:</span>
                                     <span className="font-bold text-emerald-700 text-sm">
-                                        {request.faceMatchConfidence ? `${request.faceMatchConfidence}%` : "Passed"}
+                                        {request.faceMatchConfidence ? `${request.faceMatchConfidence}%` : "N/A"}
                                     </span>
                                 </div>
                                 <div>
-                                    <span className="text-gray-500 block">Liveness Validation:</span>
+                                    <span className="text-gray-500 block">Face Detected:</span>
                                     <span className="font-semibold text-gray-800">
-                                        {request.isLive ? "Passed (Real Human)" : "Verified"}
+                                        {request.hasDetectedFace ? "Yes" : (request.isLive ? "Yes" : "No")}
                                     </span>
                                 </div>
                             </div>
@@ -221,7 +249,7 @@ const VerificationDetailPage = () => {
                         <button
                             onClick={() => handleDecision("REJECTED")}
                             disabled={submitting || request.status === "REJECTED"}
-                            className="flex-1 flex items-center justify-center gap-2 py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-semibold rounded-lg text-sm transition-colors"
+                            className="flex-1 flex items-center justify-center gap-2 py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-semibold rounded-lg text-sm transition-colors cursor-pointer"
                         >
                             <LuCircleX size={18} />
                             Reject Request
@@ -229,7 +257,7 @@ const VerificationDetailPage = () => {
                         <button
                             onClick={() => handleDecision("APPROVED")}
                             disabled={submitting || request.status === "APPROVED"}
-                            className="flex-1 flex items-center justify-center gap-2 py-3 bg-[#2E7D32] hover:bg-emerald-800 disabled:opacity-50 text-white font-semibold rounded-lg text-sm transition-colors"
+                            className="flex-1 flex items-center justify-center gap-2 py-3 bg-[#2E7D32] hover:bg-emerald-800 disabled:opacity-50 text-white font-semibold rounded-lg text-sm transition-colors cursor-pointer"
                         >
                             <LuCircleCheck size={18} />
                             Approve Verification

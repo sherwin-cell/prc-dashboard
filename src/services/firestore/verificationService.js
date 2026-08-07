@@ -1,84 +1,136 @@
 // src/services/firestore/verificationService.js
 import { db } from "../../firebase/config";
-import { 
-  collection, 
-  doc, 
-  getDoc, 
-  getDocs, 
-  updateDoc, 
-  query, 
-  where, 
-  serverTimestamp 
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  updateDoc,
+  query,
+  where,
+  serverTimestamp,
 } from "firebase/firestore";
-import { updateUserVerificationStatus } from "./userService";
 import { logAdminAction } from "../auditService";
 
 /**
- * Fetch users filtered by verification status from the 'users' collection
+ * Fetch verification submissions filtered by status from the
+ * 'verifications' collection (this is where the mobile app actually
+ * writes idPhotoUrl, selfieUrl, extractedName, idNumber, etc.)
  */
 export const getVerificationRequests = async (statusFilter = "PENDING") => {
   try {
-    const usersRef = collection(db, "users");
-    
-    // Normalize status filter (e.g., "PENDING" -> "pending")
+    const verificationsRef = collection(db, "verifications");
+
+    // Statuses are stored lowercase in Firestore (e.g. "pending")
     const targetStatus = statusFilter.toLowerCase();
-    
+
     let q;
     if (statusFilter && statusFilter !== "ALL") {
-      q = query(usersRef, where("verificationStatus", "==", targetStatus));
+      q = query(verificationsRef, where("status", "==", targetStatus));
     } else {
-      q = usersRef;
+      q = verificationsRef;
     }
 
     const snapshot = await getDocs(q);
-    
-    return snapshot.docs.map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        userId: doc.id,
-        // Map user document fields to match your UI component expectations
-        userName: data.fullName || data.name || "Unknown User",
-        userEmail: data.email || "No Email",
-        status: (data.verificationStatus || "pending").toUpperCase(),
-        idType: data.idType || "Government ID",
-        submittedAt: data.updatedAt || data.createdAt,
-        ...data,
-      };
-    });
+
+    // Verification docs don't store the user's name/email directly, so
+    // pull those from the linked users/{userId} doc for display.
+    const results = await Promise.all(
+      snapshot.docs.map(async (docSnap) => {
+        const data = docSnap.data();
+        let userName = "Unknown User";
+        let userEmail = "No Email";
+
+        try {
+          const userSnap = await getDoc(doc(db, "users", data.userId || docSnap.id));
+          if (userSnap.exists()) {
+            const userData = userSnap.data();
+            userName = userData.fullName || userData.name || userName;
+            userEmail = userData.email || userEmail;
+          }
+        } catch (e) {
+          console.warn(`Could not fetch user info for ${docSnap.id}:`, e);
+        }
+
+        return {
+          id: docSnap.id,
+          userId: data.userId || docSnap.id,
+          userName,
+          userEmail,
+          status: (data.status || "pending").toUpperCase(),
+          idType: data.idType || "Philippine Gov ID",
+          submittedAt: data.submittedAt,
+          ...data,
+        };
+      })
+    );
+
+    return results;
   } catch (error) {
-    console.error("Error fetching verification requests from users collection:", error);
+    console.error("Error fetching verification requests:", error);
     throw error;
   }
 };
 
 /**
- * Get single user verification detail
+ * Get a single verification submission's detail, merged with basic
+ * user info for display.
  */
 export const getVerificationById = async (userId) => {
   try {
-    const userRef = doc(db, "users", userId);
-    const docSnap = await getDoc(userRef);
-    if (docSnap.exists()) {
-      const data = docSnap.data();
-      return { 
-        id: docSnap.id, 
-        userId: docSnap.id,
-        userName: data.fullName || data.name,
-        userEmail: data.email,
-        status: (data.verificationStatus || "pending").toUpperCase(),
-        ...data 
-      };
+    const verificationRef = doc(db, "verifications", userId);
+    const docSnap = await getDoc(verificationRef);
+    if (!docSnap.exists()) return null;
+
+    const data = docSnap.data();
+
+    let userName = "Unknown User";
+    let userEmail = "No Email";
+    try {
+      const userSnap = await getDoc(doc(db, "users", data.userId || userId));
+      if (userSnap.exists()) {
+        const userData = userSnap.data();
+        userName = userData.fullName || userData.name || userName;
+        userEmail = userData.email || userEmail;
+      }
+    } catch (e) {
+      console.warn(`Could not fetch user info for ${userId}:`, e);
     }
-    return null;
+
+    return {
+      id: docSnap.id,
+      userId: data.userId || userId,
+      userName,
+      userEmail,
+      status: (data.status || "pending").toUpperCase(),
+      // Map real field names written by the Flutter app to what the
+      // detail page expects to render.
+      govIdUrl: data.idPhotoUrl,
+      backIdUrl: data.backIdPhotoUrl,
+      selfieUrl: data.selfieUrl,
+      idType: data.idType || "Philippine Gov ID",
+      ocrName: data.extractedName,
+      ocrIdNumber: data.idNumber,
+      // Not currently produced by the OCR pipeline — left undefined so
+      // the UI correctly shows "N/A" instead of a fake value.
+      ocrDob: data.ocrDob,
+      ocrAddress: data.ocrAddress,
+      // The face detector only returns a boolean today, not a % score.
+      faceMatchConfidence: data.faceMatchConfidence, // undefined for now
+      isLive: data.hasDetectedFace,
+      adminNotes: data.adminNotes,
+      ...data,
+    };
   } catch (error) {
-    console.error(`Error fetching user verification detail ${userId}:`, error);
+    console.error(`Error fetching verification detail ${userId}:`, error);
     throw error;
   }
 };
 
 /**
- * Process identity verification decision (Verify / Reject)
+ * Process identity verification decision (Approve / Reject).
+ * Updates both the 'verifications' doc (so the admin list/detail views
+ * reflect the decision) and the 'users' doc (so the mobile app sees it).
  */
 export const processVerificationDecision = async ({
   userId,
@@ -87,12 +139,22 @@ export const processVerificationDecision = async ({
   adminUser,
 }) => {
   try {
-    const userRef = doc(db, "users", userId);
-    const isApproved = status === "APPROVED" || status === "VERIFIED";
+    const isApproved = status === "APPROVED";
+    const newStatus = isApproved ? "approved" : "rejected";
 
-    // Update status on the user document in Firestore
+    // 1. Update the verification submission record
+    const verificationRef = doc(db, "verifications", userId);
+    await updateDoc(verificationRef, {
+      status: newStatus,
+      adminNotes: adminNotes || "",
+      reviewedBy: adminUser?.email || "Admin",
+      reviewedAt: serverTimestamp(),
+    });
+
+    // 2. Update the user's main profile status (read by the mobile app)
+    const userRef = doc(db, "users", userId);
     await updateDoc(userRef, {
-      verificationStatus: isApproved ? "approved" : "rejected",
+      verificationStatus: newStatus,
       isVerified: isApproved,
       adminNotes: adminNotes || "",
       reviewedBy: adminUser?.email || "Admin",
