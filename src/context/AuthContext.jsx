@@ -22,20 +22,9 @@ export const AuthProvider = ({ children }) => {
   const [adminProfile, setAdminProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Simplified login function: Let onAuthStateChanged resolve the user role
   const login = async (email, password) => {
-    const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    const user = userCredential.user;
-
-    // Verify admin role from Firestore
-    const userDocRef = doc(db, "users", user.uid);
-    const userSnap = await getDoc(userDocRef);
-
-    if (!userSnap.exists() || userSnap.data()?.role !== "admin") {
-      await signOut(auth);
-      throw new Error("ACCESS_DENIED: User is not authorized as a PRC Admin.");
-    }
-
-    return userCredential;
+    return await signInWithEmailAndPassword(auth, email, password);
   };
 
   const logout = () => {
@@ -50,18 +39,19 @@ export const AuthProvider = ({ children }) => {
           const userSnap = await getDoc(userDocRef);
 
           if (userSnap.exists() && userSnap.data()?.role === "admin") {
-            setCurrentUser(user);
             setAdminProfile(userSnap.data());
+            setCurrentUser(user);
           } else {
-            // Not an admin — force sign out
+            console.warn("User unauthorized: Missing 'admin' role.");
             setCurrentUser(null);
             setAdminProfile(null);
             await signOut(auth);
           }
         } catch (error) {
-          console.error("Error fetching admin profile:", error);
+          console.error("Failed to verify user permissions:", error);
           setCurrentUser(null);
           setAdminProfile(null);
+          await signOut(auth);
         }
       } else {
         setCurrentUser(null);

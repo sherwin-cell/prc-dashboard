@@ -1,40 +1,60 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-// Updated Service Import
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+// Service Import
 import { getVerificationRequests } from "../../services/firestore/verificationService";
 import StatusBadge from "../../components/common/StatusBadge";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
-import { LuSearch, LuEye, LuRefreshCw } from "react-icons/lu";
+import { LuSearch, LuEye, LuRefreshCw, LuShieldAlert } from "react-icons/lu";
 
 const VerificationListPage = () => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [filter, setFilter] = useState("PENDING");
   const [searchQuery, setSearchQuery] = useState("");
   const navigate = useNavigate();
 
-  const loadData = async () => {
+  const loadData = useCallback(async (user, currentFilter = "PENDING") => {
+    if (!user) {
+      setLoading(false);
+      setError("Authentication required. Please sign in to access donor verifications.");
+      return;
+    }
+
     setLoading(true);
+    setError(null);
     try {
-      const data = await getVerificationRequests(filter);
+      const data = await getVerificationRequests(currentFilter);
       setRequests(data);
     } catch (err) {
       console.error("Failed to load verification requests:", err);
+      setError(err.message || "Failed to fetch verification requests due to permissions.");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadData();
-  }, [filter]);
+    const auth = getAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      loadData(user, filter);
+    });
+
+    return () => unsubscribe();
+  }, [loadData, filter]);
 
   const filteredRequests = requests.filter((req) => {
     const search = searchQuery.toLowerCase();
+    const applicantName = req.extractedName || req.userName || "";
+    const applicantEmail = req.userEmail || "";
+    const idType = req.idType || "";
+
     return (
-      req.userName?.toLowerCase().includes(search) ||
-      req.userEmail?.toLowerCase().includes(search) ||
-      req.idType?.toLowerCase().includes(search)
+      applicantName.toLowerCase().includes(search) ||
+      applicantEmail.toLowerCase().includes(search) ||
+      idType.toLowerCase().includes(search)
     );
   });
 
@@ -45,12 +65,12 @@ const VerificationListPage = () => {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Donor Verifications</h2>
           <p className="text-sm text-gray-500">
-            Review government IDs, OCR scans, and facial verification matches.
+            Review government IDs, OCR scans, and local FaceNet facial verification matches.
           </p>
         </div>
         <button
-          onClick={loadData}
-          className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+          onClick={() => loadData(getAuth().currentUser, filter)}
+          className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
         >
           <LuRefreshCw size={16} />
           <span>Refresh</span>
@@ -64,8 +84,11 @@ const VerificationListPage = () => {
           {["PENDING", "APPROVED", "REJECTED", "ALL"].map((status) => (
             <button
               key={status}
-              onClick={() => setFilter(status)}
-              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+              onClick={() => {
+                setFilter(status);
+                loadData(getAuth().currentUser, status);
+              }}
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
                 filter === status
                   ? "bg-[#D32F2F] text-white"
                   : "bg-gray-100 text-gray-600 hover:bg-gray-200"
@@ -93,6 +116,12 @@ const VerificationListPage = () => {
       <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
         {loading ? (
           <LoadingSpinner message="Fetching donor verifications..." />
+        ) : error ? (
+          <div className="p-12 text-center text-rose-600 space-y-2">
+            <LuShieldAlert size={36} className="mx-auto" />
+            <p className="font-semibold text-lg">Permission / Access Error</p>
+            <p className="text-sm text-gray-500 max-w-md mx-auto">{error}</p>
+          </div>
         ) : filteredRequests.length === 0 ? (
           <div className="p-12 text-center text-gray-500">
             <p className="font-semibold text-lg">No verification requests found</p>
@@ -112,45 +141,55 @@ const VerificationListPage = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filteredRequests.map((req) => (
-                  <tr key={req.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="font-semibold text-gray-900">{req.userName || "Unnamed User"}</div>
-                      <div className="text-xs text-gray-500">{req.userEmail}</div>
-                    </td>
-                    <td className="px-6 py-4 font-medium text-gray-700">
-                      {req.idType || "Philippine Gov ID"}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200">
-                        {req.ocrName ? "Extracted" : "Manual Check"}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`text-xs font-semibold px-2.5 py-1 rounded-md ${
-                          req.faceMatchConfidence >= 80
-                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                            : "bg-amber-50 text-amber-700 border border-amber-200"
-                        }`}
-                      >
-                        {req.faceMatchConfidence ? `${req.faceMatchConfidence}% Match` : "Not Scanned"}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <StatusBadge status={req.status} />
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => navigate(`/verifications/${req.id}`)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#D32F2F] text-white text-xs font-medium rounded-lg hover:bg-[#B71C1C] transition-colors"
-                      >
-                        <LuEye size={14} />
-                        <span>Review</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {filteredRequests.map((req) => {
+                  const applicantName = req.extractedName || req.userName || "Unnamed User";
+                  const hasOcr = req.extractedName || req.ocrName;
+                  const matchScore = req.faceMatchConfidence ?? req.faceMatchSimilarity ?? null;
+
+                  return (
+                    <tr key={req.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-gray-900">{applicantName}</div>
+                        <div className="text-xs text-gray-500">{req.userEmail || req.userId}</div>
+                      </td>
+                      <td className="px-6 py-4 font-medium text-gray-700">
+                        {req.idType || "Philippine Gov ID"}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200">
+                          {hasOcr ? "Extracted" : "Manual Check"}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`text-xs font-semibold px-2.5 py-1 rounded-md ${
+                            matchScore === undefined || matchScore === null
+                              ? "bg-gray-100 text-gray-600 border border-gray-200"
+                              : matchScore >= 75
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : "bg-rose-50 text-rose-700 border border-rose-200"
+                          }`}
+                        >
+                          {matchScore !== undefined && matchScore !== null
+                            ? `${matchScore.toFixed(1)}% Match`
+                            : "Not Scanned"}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <StatusBadge status={req.status} />
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => navigate(`/verifications/${req.id}`)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#D32F2F] text-white text-xs font-medium rounded-lg hover:bg-[#B71C1C] transition-colors cursor-pointer"
+                        >
+                          <LuEye size={14} />
+                          <span>Review</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

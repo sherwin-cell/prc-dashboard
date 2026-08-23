@@ -6,66 +6,104 @@ import {
   getDoc,
   getDocs,
   updateDoc,
-  query,
-  where,
   serverTimestamp,
 } from "firebase/firestore";
 import { logAdminAction } from "../auditService";
 
 /**
- * Fetch verification submissions filtered by status from the
- * 'verifications' collection (this is where the mobile app actually
- * writes idPhotoUrl, selfieUrl, extractedName, idNumber, etc.)
+ * Maps database status strings to standard UI status tags safely
+ */
+const mapStatusToUI = (status) => {
+  if (!status) return "PENDING";
+  const s = String(status).toLowerCase().trim();
+  if (s === "under_review" || s === "under-review" || s === "pending" || s === "submitted") return "PENDING";
+  if (s === "approved" || s === "verified") return "APPROVED";
+  if (s === "rejected" || s === "declined") return "REJECTED";
+  return s.toUpperCase();
+};
+
+/**
+ * Fetch verification submissions from both 'verificationRequests' 
+ * and 'users' collections with built-in debugging logs.
  */
 export const getVerificationRequests = async (statusFilter = "PENDING") => {
   try {
-    const verificationsRef = collection(db, "verifications");
+    const normalizedFilter = (statusFilter || "ALL").toUpperCase();
+    let records = [];
 
-    // Statuses are stored lowercase in Firestore (e.g. "pending")
-    const targetStatus = statusFilter.toLowerCase();
+    // 1. Primary Query: Read from 'verificationRequests'
+    try {
+      const requestsRef = collection(db, "verificationRequests");
+      const reqSnapshot = await getDocs(requestsRef);
 
-    let q;
-    if (statusFilter && statusFilter !== "ALL") {
-      q = query(verificationsRef, where("status", "==", targetStatus));
-    } else {
-      q = verificationsRef;
-    }
-
-    const snapshot = await getDocs(q);
-
-    // Verification docs don't store the user's name/email directly, so
-    // pull those from the linked users/{userId} doc for display.
-    const results = await Promise.all(
-      snapshot.docs.map(async (docSnap) => {
+      reqSnapshot.docs.forEach((docSnap) => {
         const data = docSnap.data();
-        let userName = "Unknown User";
-        let userEmail = "No Email";
-
-        try {
-          const userSnap = await getDoc(doc(db, "users", data.userId || docSnap.id));
-          if (userSnap.exists()) {
-            const userData = userSnap.data();
-            userName = userData.fullName || userData.name || userName;
-            userEmail = userData.email || userEmail;
-          }
-        } catch (e) {
-          console.warn(`Could not fetch user info for ${docSnap.id}:`, e);
-        }
-
-        return {
+        records.push({
+          ...data, // Spread raw data first
           id: docSnap.id,
           userId: data.userId || docSnap.id,
-          userName,
-          userEmail,
-          status: (data.status || "pending").toUpperCase(),
+          userName: data.fullName || data.userName || data.name || "Unknown User",
+          userEmail: data.email || data.userEmail || "No Email",
+          status: mapStatusToUI(data.status || data.verificationStatus), // Mapped status goes last
+          rawStatus: data.status || data.verificationStatus || "unknown",
           idType: data.idType || "Philippine Gov ID",
-          submittedAt: data.submittedAt,
-          ...data,
-        };
-      })
-    );
+          submittedAt: data.submittedAt || data.updatedAt || null,
+          idImageUrl: data.idImageUrl || data.idPhotoUrl,
+          selfieImageUrl: data.selfieImageUrl || data.selfieUrl,
+        });
+      });
+    } catch (err) {
+      console.warn("Could not query verificationRequests collection:", err.message);
+    }
 
-    return results;
+    // 2. Secondary Query: Read directly from 'users' collection for profile records
+    try {
+      const usersRef = collection(db, "users");
+      const usersSnapshot = await getDocs(usersRef);
+
+      usersSnapshot.docs.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (records.some((r) => r.userId === docSnap.id)) return;
+
+        if (data.verificationStatus || data.idImageUrl) {
+          records.push({
+            id: docSnap.id,
+            userId: docSnap.id,
+            userName: data.fullName || data.name || "Unknown User",
+            userEmail: data.email || "No Email",
+            status: mapStatusToUI(data.verificationStatus || data.status),
+            rawStatus: data.verificationStatus || data.status || "unknown",
+            idType: data.idType || "Philippine Gov ID",
+            submittedAt: data.updatedAt || null,
+            idImageUrl: data.idImageUrl || data.idPhotoUrl,
+            selfieImageUrl: data.selfieImageUrl || data.selfieUrl,
+            extractedName: data.extractedName || data.fullName,
+            idNumber: data.idNumber,
+            ...data,
+          });
+        }
+      });
+    } catch (err) {
+      console.warn("Could not query users collection:", err.message);
+    }
+
+    // DEBUG LOG: See everything pulled from Firestore before filtering
+    console.log("=== TOTAL FETCHED VERIFICATION RECORDS ===", records);
+
+    // Apply active tab filtering properly (handling both PENDING and UNDER_REVIEW nicely)
+    if (normalizedFilter !== "ALL") {
+      records = records.filter((item) => {
+        if (normalizedFilter === "PENDING") {
+          return item.status === "PENDING";
+        }
+        return item.status === normalizedFilter;
+      });
+    }
+
+    // DEBUG LOG: See records matching the current UI tab filter
+    console.log(`=== FILTERED RECORDS FOR [${normalizedFilter}] ===`, records);
+
+    return records;
   } catch (error) {
     console.error("Error fetching verification requests:", error);
     throw error;
@@ -73,52 +111,46 @@ export const getVerificationRequests = async (statusFilter = "PENDING") => {
 };
 
 /**
- * Get a single verification submission's detail, merged with basic
- * user info for display.
+ * Get single verification submission detail.
  */
 export const getVerificationById = async (userId) => {
   try {
-    const verificationRef = doc(db, "verifications", userId);
-    const docSnap = await getDoc(verificationRef);
-    if (!docSnap.exists()) return null;
+    let data = null;
 
-    const data = docSnap.data();
+    // Check verificationRequests collection first
+    const reqRef = doc(db, "verificationRequests", userId);
+    const reqSnap = await getDoc(reqRef);
 
-    let userName = "Unknown User";
-    let userEmail = "No Email";
-    try {
-      const userSnap = await getDoc(doc(db, "users", data.userId || userId));
+    if (reqSnap.exists()) {
+      data = reqSnap.data();
+    } else {
+      // Fallback to checking users collection
+      const userRef = doc(db, "users", userId);
+      const userSnap = await getDoc(userRef);
       if (userSnap.exists()) {
-        const userData = userSnap.data();
-        userName = userData.fullName || userData.name || userName;
-        userEmail = userData.email || userEmail;
+        data = userSnap.data();
       }
-    } catch (e) {
-      console.warn(`Could not fetch user info for ${userId}:`, e);
     }
 
+    if (!data) return null;
+
     return {
-      id: docSnap.id,
-      userId: data.userId || userId,
-      userName,
-      userEmail,
-      status: (data.status || "pending").toUpperCase(),
-      // Map real field names written by the Flutter app to what the
-      // detail page expects to render.
-      govIdUrl: data.idPhotoUrl,
-      backIdUrl: data.backIdPhotoUrl,
-      selfieUrl: data.selfieUrl,
+      id: userId,
+      userId: userId,
+      userName: data.fullName || data.name || "Unknown User",
+      userEmail: data.email || "No Email",
+      status: mapStatusToUI(data.verificationStatus || data.status),
+      govIdUrl: data.idImageUrl || data.idPhotoUrl || null,
+      backIdUrl: data.backIdImageUrl || data.backIdPhotoUrl || null,
+      selfieUrl: data.selfieImageUrl || data.selfieUrl || null,
       idType: data.idType || "Philippine Gov ID",
-      ocrName: data.extractedName,
-      ocrIdNumber: data.idNumber,
-      // Not currently produced by the OCR pipeline — left undefined so
-      // the UI correctly shows "N/A" instead of a fake value.
-      ocrDob: data.ocrDob,
-      ocrAddress: data.ocrAddress,
-      // The face detector only returns a boolean today, not a % score.
-      faceMatchConfidence: data.faceMatchConfidence, // undefined for now
-      isLive: data.hasDetectedFace,
-      adminNotes: data.adminNotes,
+      ocrName: data.extractedName || data.fullName || null,
+      ocrIdNumber: data.idNumber || null,
+      ocrDob: data.ocrDob || data.dob || null,
+      ocrAddress: data.ocrAddress || data.address || null,
+      faceMatchConfidence: data.faceMatchConfidence ?? null,
+      isLive: Boolean(data.hasDetectedFace),
+      adminNotes: data.adminNotes || "",
       ...data,
     };
   } catch (error) {
@@ -129,8 +161,6 @@ export const getVerificationById = async (userId) => {
 
 /**
  * Process identity verification decision (Approve / Reject).
- * Updates both the 'verifications' doc (so the admin list/detail views
- * reflect the decision) and the 'users' doc (so the mobile app sees it).
  */
 export const processVerificationDecision = async ({
   userId,
@@ -142,16 +172,7 @@ export const processVerificationDecision = async ({
     const isApproved = status === "APPROVED";
     const newStatus = isApproved ? "approved" : "rejected";
 
-    // 1. Update the verification submission record
-    const verificationRef = doc(db, "verifications", userId);
-    await updateDoc(verificationRef, {
-      status: newStatus,
-      adminNotes: adminNotes || "",
-      reviewedBy: adminUser?.email || "Admin",
-      reviewedAt: serverTimestamp(),
-    });
-
-    // 2. Update the user's main profile status (read by the mobile app)
+    // 1. Update user record
     const userRef = doc(db, "users", userId);
     await updateDoc(userRef, {
       verificationStatus: newStatus,
@@ -161,13 +182,31 @@ export const processVerificationDecision = async ({
       reviewedAt: serverTimestamp(),
     });
 
-    // Log administrative audit entry
-    await logAdminAction(
-      adminUser,
-      `VERIFICATION_${status}`,
-      userId,
-      `User identity ${userId} was marked as ${status.toLowerCase()}. Notes: "${adminNotes || "N/A"}"`
-    );
+    // 2. Update verificationRequests record if it exists
+    try {
+      const reqRef = doc(db, "verificationRequests", userId);
+      const reqSnap = await getDoc(reqRef);
+      if (reqSnap.exists()) {
+        await updateDoc(reqRef, {
+          status: newStatus,
+          adminNotes: adminNotes || "",
+          reviewedBy: adminUser?.email || "Admin",
+          reviewedAt: serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      console.warn("No separate verificationRequests doc to update:", e.message);
+    }
+
+    // 3. Log administrative audit action
+    if (typeof logAdminAction === "function") {
+      await logAdminAction(
+        adminUser,
+        `VERIFICATION_${status}`,
+        userId,
+        `User identity ${userId} was marked as ${newStatus}. Notes: "${adminNotes || "N/A"}"`
+      );
+    }
 
     return true;
   } catch (error) {

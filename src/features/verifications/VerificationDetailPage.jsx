@@ -57,8 +57,7 @@ const VerificationDetailPage = () => {
         setSubmitting(true);
         try {
             await processVerificationDecision({
-                requestId: id,
-                userId: request.userId,
+                userId: request.userId || id,
                 status,
                 adminNotes,
                 adminUser: currentUser,
@@ -67,6 +66,7 @@ const VerificationDetailPage = () => {
             alert(`Verification successfully marked as ${status}.`);
             navigate("/verifications");
         } catch (err) {
+            console.error("Error processing decision:", err);
             alert("Error processing decision. Check your console or Firestore rules.");
         } finally {
             setSubmitting(false);
@@ -90,13 +90,19 @@ const VerificationDetailPage = () => {
         );
     }
 
-    // Helper fallbacks between Firestore keys
+    // Fixed key fallbacks aligning exact Flutter Firestore payload with legacy React keys
     const displayName = request.extractedName || request.userName || "Donor Verification Request";
     const displayIdNumber = request.idNumber || request.ocrIdNumber || "N/A";
     const displayDob = request.extractedBirthDate || request.ocrDob || request.birthDate || "N/A";
-    const displayFrontUrl = request.idPhotoUrl || request.govIdUrl;
-    const displayBackUrl = request.backIdPhotoUrl || request.backIdUrl;
-    const displaySelfieUrl = request.selfieUrl;
+    
+    // Cloudinary Image Key Alignment
+    const displayFrontUrl = request.idImageUrl || request.idPhotoUrl || request.govIdUrl;
+    const displayBackUrl = request.backIdImageUrl || request.backIdPhotoUrl || request.backIdUrl;
+    const displaySelfieUrl = request.selfieImageUrl || request.selfieUrl;
+
+    // Face Comparison Score Evaluation
+    const matchScore = request.faceMatchConfidence ?? request.faceMatchSimilarity ?? null;
+    const isMatchPassed = request.faceMatchPassed ?? (matchScore !== null && matchScore >= 75.0);
 
     return (
         <div className="space-y-6">
@@ -142,7 +148,7 @@ const VerificationDetailPage = () => {
                             </div>
                         </div>
 
-                        {/* Back of ID — only shown if uploaded */}
+                        {/* Back of ID */}
                         {displayBackUrl && (
                             <div>
                                 <p className="text-[11px] font-semibold text-gray-500 mb-1">Back</p>
@@ -158,7 +164,7 @@ const VerificationDetailPage = () => {
 
                         <div className="text-xs text-gray-500 flex justify-between">
                             <span>ID Type: <strong>{request.idType || "Philippine Gov ID"}</strong></span>
-                            <span>Storage: Cloudinary</span>
+                            <span>Provider: {request.verificationProvider || "local_facenet"}</span>
                         </div>
                     </div>
 
@@ -177,7 +183,7 @@ const VerificationDetailPage = () => {
                     </div>
                 </div>
 
-                {/* Right Column: OCR Analysis & Decision Controls */}
+                {/* Right Column: OCR Analysis & Facial Match Metrics */}
                 <div className="space-y-6 flex flex-col justify-between">
                     <div className="space-y-6">
                         {/* ML Kit OCR Data */}
@@ -206,23 +212,39 @@ const VerificationDetailPage = () => {
                             </div>
                         </div>
 
-                        {/* Face Detection Score */}
+                        {/* Facial Comparison Score */}
                         <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-xs space-y-3">
                             <div className="flex items-center gap-2 text-[#2E7D32] font-bold text-sm">
                                 <LuScanFace size={20} />
-                                <span>Face Detection & Match Metrics</span>
+                                <span>Facial Verification Metrics</span>
                             </div>
                             <div className="grid grid-cols-2 gap-3 text-xs bg-gray-50 p-3 rounded-lg border border-gray-100">
                                 <div>
-                                    <span className="text-gray-500 block">Match Confidence:</span>
-                                    <span className="font-bold text-emerald-700 text-sm">
-                                        {request.faceMatchConfidence ? `${request.faceMatchConfidence}%` : "N/A"}
+                                    <span className="text-gray-500 block">Similarity Score:</span>
+                                    <span className={`font-bold text-sm ${
+                                        matchScore === null 
+                                            ? "text-gray-500" 
+                                            : isMatchPassed 
+                                            ? "text-emerald-700" 
+                                            : "text-rose-600"
+                                    }`}>
+                                        {matchScore !== null ? `${matchScore.toFixed(1)}%` : "N/A"}
                                     </span>
                                 </div>
                                 <div>
-                                    <span className="text-gray-500 block">Face Detected:</span>
-                                    <span className="font-semibold text-gray-800">
-                                        {request.hasDetectedFace ? "Yes" : (request.isLive ? "Yes" : "No")}
+                                    <span className="text-gray-500 block">Automated Match Status:</span>
+                                    <span className={`font-semibold ${
+                                        matchScore === null
+                                            ? "text-gray-600"
+                                            : isMatchPassed
+                                            ? "text-emerald-700"
+                                            : "text-rose-600"
+                                    }`}>
+                                        {matchScore === null
+                                            ? "Pending Scan"
+                                            : isMatchPassed
+                                            ? "Verified Match"
+                                            : "Manual Review Required"}
                                     </span>
                                 </div>
                             </div>
