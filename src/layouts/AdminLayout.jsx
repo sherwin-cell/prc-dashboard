@@ -1,5 +1,7 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "../firebase/config";
 import { useAuth } from "../context/AuthContext";
 import {
   LuLayoutDashboard,
@@ -13,6 +15,19 @@ import {
 const AdminLayout = () => {
   const { adminProfile, logout } = useAuth();
   const navigate = useNavigate();
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
+
+  useEffect(() => {
+    // Ensures hard refreshes wait for Firebase to restore session state before rendering/redirecting
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        navigate("/login", { replace: true });
+      }
+      setIsSessionLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [navigate]);
 
   const handleLogout = async () => {
     try {
@@ -23,12 +38,20 @@ const AdminLayout = () => {
     }
   };
 
+  if (isSessionLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#F5F7FA]">
+        <p className="text-sm font-semibold text-gray-500">Loading admin session...</p>
+      </div>
+    );
+  }
+
   const navItems = [
     { label: "Dashboard", path: "/", icon: LuLayoutDashboard },
+    { label: "Users", path: "/users", icon: LuUsers },
     { label: "Verifications", path: "/verifications", icon: LuShieldCheck },
-    // Prepared for future modules:
-    // { label: "Donors", path: "/donors", icon: LuUsers },
-    // { label: "Blood Requests", path: "/requests", icon: LuDroplet },
+    { label: "Blood Requests", path: "/blood-requests", icon: LuDroplet },
+    { label: "Donors", path: "/donors", icon: LuUsers },
   ];
 
   return (

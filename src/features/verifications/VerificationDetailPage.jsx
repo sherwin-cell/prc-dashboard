@@ -16,7 +16,16 @@ import {
     LuScanFace,
     LuFileText,
     LuTriangleAlert,
+    LuCheck,
 } from "react-icons/lu";
+
+const REJECTION_REASONS = [
+    { id: "blurry", label: "Blurry or Unreadable ID / Selfie" },
+    { id: "mismatch_face", label: "Facial features do not match ID photo" },
+    { id: "mismatch_details", label: "Extracted details mismatch (Name/DOB error)" },
+    { id: "expired", label: "Submitted Identification is Expired" },
+    { id: "unsupported", label: "Unsupported or Invalid Government ID type" },
+];
 
 const VerificationDetailPage = () => {
     const { id } = useParams();
@@ -26,6 +35,7 @@ const VerificationDetailPage = () => {
     const [request, setRequest] = useState(null);
     const [loading, setLoading] = useState(true);
     const [adminNotes, setAdminNotes] = useState("");
+    const [selectedReasons, setSelectedReasons] = useState([]);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState(null);
 
@@ -48,6 +58,23 @@ const VerificationDetailPage = () => {
         fetchDetail();
     }, [id]);
 
+    const handleReasonToggle = (label) => {
+        let updatedReasons;
+        if (selectedReasons.includes(label)) {
+            updatedReasons = selectedReasons.filter((r) => r !== label);
+        } else {
+            updatedReasons = [...selectedReasons, label];
+        }
+        setSelectedReasons(updatedReasons);
+
+        // Automatically format and set text in adminNotes text area
+        if (updatedReasons.length > 0) {
+            setAdminNotes(`Reason for rejection:\n• ${updatedReasons.join("\n• ")}`);
+        } else {
+            setAdminNotes("");
+        }
+    };
+
     const handleDecision = async (status) => {
         if (status === "REJECTED" && !adminNotes.trim()) {
             alert("Please provide a reason for rejection in the review notes.");
@@ -57,7 +84,8 @@ const VerificationDetailPage = () => {
         setSubmitting(true);
         try {
             await processVerificationDecision({
-                userId: request.userId || id,
+                documentId: id, // FIXED: Explicitly pass the document ID
+                userId: request.userId, // Pass userId separately
                 status,
                 adminNotes,
                 adminUser: currentUser,
@@ -90,17 +118,14 @@ const VerificationDetailPage = () => {
         );
     }
 
-    // Fixed key fallbacks aligning exact Flutter Firestore payload with legacy React keys
     const displayName = request.extractedName || request.userName || "Donor Verification Request";
     const displayIdNumber = request.idNumber || request.ocrIdNumber || "N/A";
     const displayDob = request.extractedBirthDate || request.ocrDob || request.birthDate || "N/A";
     
-    // Cloudinary Image Key Alignment
     const displayFrontUrl = request.idImageUrl || request.idPhotoUrl || request.govIdUrl;
     const displayBackUrl = request.backIdImageUrl || request.backIdPhotoUrl || request.backIdUrl;
     const displaySelfieUrl = request.selfieImageUrl || request.selfieUrl;
 
-    // Face Comparison Score Evaluation
     const matchScore = request.faceMatchConfidence ?? request.faceMatchSimilarity ?? null;
     const isMatchPassed = request.faceMatchPassed ?? (matchScore !== null && matchScore >= 75.0);
 
@@ -247,6 +272,31 @@ const VerificationDetailPage = () => {
                                             : "Manual Review Required"}
                                     </span>
                                 </div>
+                            </div>
+                        </div>
+
+                        {/* Rejection Reasons Helper Card */}
+                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-xs space-y-3">
+                            <label className="text-xs font-bold text-gray-700 block">Common Rejection Reasons (Click to Select)</label>
+                            <div className="grid grid-cols-1 gap-2">
+                                {REJECTION_REASONS.map((reason) => {
+                                    const isSelected = selectedReasons.includes(reason.label);
+                                    return (
+                                        <button
+                                            key={reason.id}
+                                            type="button"
+                                            onClick={() => handleReasonToggle(reason.label)}
+                                            className={`flex items-center justify-between p-2.5 rounded-lg border text-xs font-medium text-left transition-all cursor-pointer ${
+                                                isSelected 
+                                                    ? "bg-rose-50 border-rose-300 text-rose-900 shadow-2xs" 
+                                                    : "bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100"
+                                            }`}
+                                        >
+                                            <span>{reason.label}</span>
+                                            {isSelected && <LuCheck size={16} className="text-rose-600 shrink-0 ml-2" />}
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </div>
 
