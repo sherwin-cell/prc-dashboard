@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
-import { LuShieldCheck, LuArrowLeft } from "react-icons/lu";
+import { LuShieldCheck, LuArrowLeft, LuFileText } from "react-icons/lu";
 
 const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
   const [reqData, setReqData] = useState(request);
@@ -43,6 +43,14 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
     }
   };
 
+  const formatDate = (val) => {
+    if (!val) return "Not Specified";
+    if (val.seconds) {
+      return new Date(val.seconds * 1000).toLocaleDateString();
+    }
+    return val;
+  };
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto p-4 sm:p-6">
       {/* Back Button & Header */}
@@ -56,7 +64,7 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
         </button>
         <div>
           <h1 className="text-xl font-bold text-gray-900">Blood Request Details</h1>
-          <p className="text-xs text-gray-500">Comprehensive overview of patient request and verification status</p>
+          <p className="text-xs text-gray-500">Comprehensive overview of patient request, medical records, and verification status</p>
         </div>
       </div>
 
@@ -69,13 +77,12 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs text-gray-500">Status:</span>
               <span
-                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
-                  reqData.status === "approved"
+                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${reqData.status === "approved"
                     ? "bg-emerald-100 text-emerald-800"
                     : reqData.status === "rejected"
-                    ? "bg-rose-100 text-rose-800"
-                    : "bg-amber-100 text-amber-800"
-                }`}
+                      ? "bg-rose-100 text-rose-800"
+                      : "bg-amber-100 text-amber-800"
+                  }`}
               >
                 {reqData.status || "pending"}
               </span>
@@ -91,73 +98,140 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
           </div>
         </div>
 
-        {/* Patient Details Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Patient Name:</strong>
-            <span className="text-gray-900 font-medium">{reqData.patientName || "N/A"}</span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Patient Age:</strong>
-            <span className="text-gray-900 font-medium">{reqData.patientAge || "N/A"}</span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Relationship to Requester:</strong>
-            <span className="text-gray-900 font-semibold">{reqData.relationship || "Not specified"}</span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Blood Type:</strong>
-            <span className="text-gray-900 font-medium">{reqData.bloodType || "O+"}</span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Units Required:</strong>
-            <span className="text-gray-900">{reqData.unitsRequired || reqData.unitsNeeded || 1}</span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Blood Component:</strong>
-            <span className="text-gray-900">{reqData.component || "Whole Blood"}</span>
-          </div>
-        </div>
-
-        {/* Hospital Details Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Hospital:</strong>
-            <span className="text-gray-900">{reqData.hospital || "N/A"}</span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Hospital Location:</strong>
-            <span className="text-gray-900">{reqData.hospitalLocation || "N/A"}</span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Target Date Needed:</strong>
-            <span className="text-gray-900">
-              {reqData.neededByDate?.seconds
-                ? new Date(reqData.neededByDate.seconds * 1000).toLocaleDateString()
-                : "Not Specified"}
-            </span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Contact Person:</strong>
-            <span className="text-gray-900">{reqData.contactPerson || "N/A"}</span>
-          </div>
-          <div>
-            <strong className="text-gray-700 block mb-0.5">Contact Number:</strong>
-            <span className="text-gray-900">{reqData.contactNumber || "N/A"}</span>
+        {/* 1. Patient Details Grid */}
+        <div>
+          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Patient Profile</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Patient Name:</strong>
+              <span className="text-gray-900 font-medium">{reqData.patientName || "N/A"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Age / Sex / Birthday:</strong>
+              <span className="text-gray-900 font-medium">
+                {reqData.patientAge || "N/A"} yrs / {reqData.patientSex || "N/A"} / {reqData.patientBirthday || "N/A"}
+              </span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Contact Number:</strong>
+              <span className="text-gray-900 font-medium">{reqData.contactNumber || "N/A"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Relative / Contact Person:</strong>
+              <span className="text-gray-900 font-medium">{reqData.relativeName || "N/A"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Relationship to Patient:</strong>
+              <span className="text-gray-900 font-semibold">{reqData.relationship || "Not specified"}</span>
+            </div>
           </div>
         </div>
 
-        {/* Notes */}
+        {/* 2. Blood Specifications Grid */}
+        <div>
+          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Blood & Clinical Specifications</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Blood Type Needed:</strong>
+              <span className="text-gray-900 font-medium">{reqData.bloodType || "O+"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Units Required:</strong>
+              <span className="text-gray-900 font-medium">{reqData.unitsRequired || reqData.unitsNeeded || 1}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Blood Component:</strong>
+              <span className="text-gray-900 font-medium">{reqData.component || "Whole Blood"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Hemoglobin / Hematocrit:</strong>
+              <span className="text-gray-900 font-medium">{reqData.hemoglobin || "N/A"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Target Date Needed:</strong>
+              <span className="text-gray-900 font-medium">{formatDate(reqData.neededByDate || reqData.requiredDate)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Hospital & Physician Information */}
+        <div>
+          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Hospital & Physician Information</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Hospital Name:</strong>
+              <span className="text-gray-900 font-medium">{reqData.hospitalName || reqData.hospital || "N/A"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Clinical Diagnosis:</strong>
+              <span className="text-gray-900 font-medium">{reqData.clinicalDiagnosis || "N/A"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Attending Physician:</strong>
+              <span className="text-gray-900 font-medium">{reqData.attendingPhysician || "N/A"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">Requesting Physician & License:</strong>
+              <span className="text-gray-900 font-medium">{reqData.requestingPhysician || "N/A"}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">BRF Document Date:</strong>
+              <span className="text-gray-900 font-medium">{formatDate(reqData.brfDate)}</span>
+            </div>
+            <div>
+              <strong className="text-gray-700 block mb-0.5">
+                BRF PDF File:
+              </strong>
+
+              {reqData.brfFileUrl ? (
+                <div className="mt-1 flex flex-col gap-2">
+                  <span className="text-gray-900 font-medium break-all">
+                    {reqData.brfFileName || "Blood Request Form.pdf"}
+                  </span>
+
+                  <a
+                    href={reqData.brfFileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 w-fit px-3 py-1.5
+                   bg-red-50 text-[#D32F2F]
+                   border border-red-100
+                   rounded-lg text-xs font-semibold
+                   hover:bg-red-100 transition"
+                  >
+                    <LuFileText size={15} />
+                    View BRF PDF
+                  </a>
+                </div>
+              ) : (
+                <span className="text-gray-400">
+                  No BRF PDF uploaded
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Notes & Other Info */}
         {reqData.notes && (
           <div className="bg-amber-50/70 border border-amber-200/60 p-3.5 rounded-xl text-xs space-y-1">
             <strong className="text-amber-900 block font-bold uppercase tracking-wider text-[10px]">
-              Special Clinical Notes / Reason:
+              Special Notes:
             </strong>
             <p className="text-amber-950 font-medium italic">"{reqData.notes}"</p>
           </div>
         )}
 
-        {/* ID Verification */}
+        {reqData.otherInfo && (
+          <div className="bg-gray-50 border border-gray-200 p-3.5 rounded-xl text-xs space-y-1">
+            <strong className="text-gray-800 block font-bold uppercase tracking-wider text-[10px]">
+              Other Information:
+            </strong>
+            <p className="text-gray-900 font-medium">{reqData.otherInfo}</p>
+          </div>
+        )}
+
+        {/* ID Verification Section */}
         {reqData.idVerification ? (
           <div className="border border-blue-100 bg-blue-50/40 p-4 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
@@ -244,11 +318,10 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
               </button>
               <button
                 onClick={handleConfirmAction}
-                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs ${
-                  confirmModal.actionType === "approve"
+                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs ${confirmModal.actionType === "approve"
                     ? "bg-emerald-600 hover:bg-emerald-700"
                     : "bg-rose-600 hover:bg-rose-700"
-                }`}
+                  }`}
               >
                 Yes, {confirmModal.actionType === "approve" ? "Approve" : "Reject"}
               </button>

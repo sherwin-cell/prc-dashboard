@@ -1,112 +1,435 @@
-import React, { useState, useEffect } from 'react';
-import { subscribeToPendingDonors, updateDonorStatus } from '../../services/firestore/donorService';
-import { useAuth } from '../../context/AuthContext';
-import LoadingSpinner from '../../components/common/LoadingSpinner';
-import DonorDetail from './DonorDetail';
-import { LuEye, LuArchive, LuTrash2, LuSearch, LuFilter } from 'react-icons/lu';
-import { db } from '../../firebase/config';
-import { doc, deleteDoc } from 'firebase/firestore';
+
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  Archive,
+  Eye,
+  Filter,
+  Search,
+  Trash2,
+} from "lucide-react";
+import {
+  deleteDoc,
+  doc,
+  serverTimestamp,
+  updateDoc,
+} from "firebase/firestore";
+
+import {
+  subscribeToPendingDonors,
+  updateDonorStatus,
+  scheduleDonorAppointment,
+} from "../../services/firestore/donorService";
+
+import { useAuth } from "../../context/AuthContext";
+import { db } from "../../firebase/config";
+import LoadingSpinner from "../../components/common/LoadingSpinner";
+import DonorDetail from "./DonorDetail";
+import { notifyDonorApplicationStatus } from "../../services/api/donorNotificationService";
+
+const BLOOD_TYPES = [
+  "A+", "A-", "B+", "B-",
+  "AB+", "AB-", "O+", "O-",
+];
+
+function statusOf(donor) {
+  return String(
+    donor.applicationStatus ||
+    donor.donorStatus ||
+    donor.status ||
+    "pending"
+  ).toLowerCase();
+}
+
+function donorName(donor) {
+  if (donor.fullName) return donor.fullName;
+
+  if (donor.lastName || donor.firstName) {
+    return [
+      donor.lastName,
+      [donor.firstName, donor.middleName]
+        .filter(Boolean)
+        .join(" "),
+    ]
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  return (
+    donor.userName ||
+    donor.displayName ||
+    "Anonymous User"
+  );
+}
+
+function formatDate(value) {
+  if (!value) return "N/A";
+
+  let date;
+
+  if (typeof value.toDate === "function") {
+    date = value.toDate();
+  } else if (typeof value.seconds === "number") {
+    date = new Date(value.seconds * 1000);
+  } else {
+    date = new Date(value);
+  }
+
+  return Number.isNaN(date.getTime())
+    ? "N/A"
+    : date.toLocaleDateString();
+}
+
+function StatusBadge({ status }) {
+  const styles = {
+    pending: "bg-amber-100 text-amber-800",
+    approved: "bg-emerald-100 text-emerald-800",
+    rejected: "bg-rose-100 text-rose-800",
+    archived: "bg-gray-100 text-gray-700",
+  };
+
+  return (
+    <span
+      className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${
+        styles[status] || "bg-gray-100 text-gray-700"
+      }`}
+    >
+      {status}
+    </span>
+  );
+}
 
 export default function PendingDonorsPage() {
   const [donors, setDonors] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState("");
   const [selectedDonor, setSelectedDonor] = useState(null);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterCategory, setFilterCategory] = useState("name");
+  const [selectedBloodType, setSelectedBloodType] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState("");
+
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [busy, setBusy] = useState(false);
+
   const { currentUser } = useAuth();
 
-  // Search and Filter States
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterCategory, setFilterCategory] = useState('donorName'); // 'donorName' or 'chapter'
-  const [selectedBloodType, setSelectedBloodType] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState('');
-
-  const bloodTypesList = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
-
-  // Custom Confirmation Modal State
-  const [confirmModal, setConfirmModal] = useState({
-    isOpen: false,
-    actionType: null, // 'archive' or 'delete'
-    donorId: null,
-    donorName: '',
-  });
-
+  // Subscribe to donor applications.
   useEffect(() => {
     const unsubscribe = subscribeToPendingDonors(
       (data) => {
         setDonors(data);
         setLoading(false);
+        setError("");
       },
       (err) => {
-        console.error(err);
-        setError('Failed to load pending donor applications.');
+        console.error(
+          "Failed to load donor applications:",
+          err
+        );
+        setError(
+          "Failed to load donor applications. Please refresh and try again."
+        );
         setLoading(false);
       }
     );
 
-    return () => unsubscribe();
+    return unsubscribe;
   }, []);
 
-  const handleConfirmAction = async () => {
-    const { actionType, donorId } = confirmModal;
-    if (!actionType || !donorId) return;
+  // Synchronize the selected donor with Firestore updates.
+  useEffect(() => {
+    if (!selectedDonor) return;
 
+    const latest = donors.find(
+      (item) => item.id === selectedDonor.id
+    );
+
+    if (latest) {
+      setSelectedDonor((previous) => {
+        if (!previous || previous.id !== latest.id) {
+          return previous;
+        }
+
+        return {
+          ...previous,
+          ...latest,
+        };
+      });
+    }
+  }, [donors, selectedDonor?.id]);
+
+  // Approve or reject a donor application.
+  const handleStatusUpdate = async (
+    donorId,
+    status,
+    reason = ""
+  ) => {
+    if (!currentUser?.uid) {
+      throw new Error(
+        "You must be logged in as an administrator."
+      );
+    }
+
+    const result = await updateDonorStatus(
+      donorId,
+      status,
+      currentUser,
+      reason
+    );
+
+    if (!result?.success) {
+      throw new Error(
+        result?.error || "Could not update application."
+      );
+    }
+
+    const updatedFields = {
+      applicationStatus: status,
+      donorStatus: status,
+      status,
+      reviewEventId: result.reviewEventId,
+      rejectionReason:
+        status === "rejected" ? reason.trim() : "",
+    };
+
+    setDonors((previous) =>
+      previous.map((item) =>
+        item.id === donorId
+          ? { ...item, ...updatedFields }
+          : item
+      )
+    );
+
+    setSelectedDonor((previous) =>
+      previous?.id === donorId
+        ? { ...previous, ...updatedFields }
+        : previous
+    );
+
+    // Notification failure should not undo the review.
     try {
-      if (actionType === 'archive') {
-        await updateDonorStatus(donorId, 'archived', currentUser);
-      } else if (actionType === 'delete') {
-        await deleteDoc(doc(db, "donors", donorId));
+      const notificationResult =
+        await notifyDonorApplicationStatus({
+          donorId,
+          status,
+          reviewEventId: result.reviewEventId,
+        });
+
+      if (!notificationResult?.success) {
+        console.warn(
+          "Donor application saved, but notification was not fully sent:",
+          notificationResult
+        );
+      }
+    } catch (notificationError) {
+      console.error(
+        "Donor application saved, but notification request failed:",
+        notificationError
+      );
+    }
+
+    return result;
+  };
+
+  // Schedule an appointment for an approved donor.
+  const handleScheduleAppointment = async (appointment) => {
+    if (!currentUser?.uid) {
+      throw new Error(
+        "You must be logged in as an administrator."
+      );
+    }
+
+    if (!selectedDonor?.id) {
+      throw new Error("No donor application selected.");
+    }
+
+    const donorId = selectedDonor.id;
+
+    const result = await scheduleDonorAppointment(
+      donorId,
+      appointment,
+      currentUser
+    );
+
+    if (!result?.success) {
+      throw new Error(
+        result?.error || "Could not schedule appointment."
+      );
+    }
+
+    const updatedFields = {
+      appointment: result.appointment,
+      appointmentStatus: result.appointmentStatus,
+    };
+
+    setDonors((previous) =>
+      previous.map((item) =>
+        item.id === donorId
+          ? { ...item, ...updatedFields }
+          : item
+      )
+    );
+
+    setSelectedDonor((previous) =>
+      previous?.id === donorId
+        ? { ...previous, ...updatedFields }
+        : previous
+    );
+
+    return result;
+  };
+
+  // Search and filter donor applications.
+  const filtered = useMemo(() => {
+    return donors.filter((donor) => {
+      const status = statusOf(donor);
+
+      if (status === "archived") return false;
+
+      if (selectedStatus && status !== selectedStatus) {
+        return false;
       }
 
-      setDonors((prev) => prev.filter((d) => d.id !== donorId));
-      setConfirmModal({ isOpen: false, actionType: null, donorId: null, donorName: '' });
+      if (
+        selectedBloodType &&
+        String(donor.bloodType || "").toUpperCase() !==
+          selectedBloodType
+      ) {
+        return false;
+      }
+
+      const queryText = searchQuery.trim().toLowerCase();
+
+      if (!queryText) return true;
+
+      if (filterCategory === "birthday") {
+        const birthday =
+          typeof donor.birthday?.toDate === "function"
+            ? donor.birthday.toDate().toLocaleDateString()
+            : String(donor.birthday || "");
+
+        return birthday.toLowerCase().includes(queryText);
+      }
+
+      return donorName(donor)
+        .toLowerCase()
+        .includes(queryText);
+    });
+  }, [
+    donors,
+    selectedStatus,
+    selectedBloodType,
+    searchQuery,
+    filterCategory,
+  ]);
+
+  // Archive or permanently delete an application.
+  const runConfirmAction = async () => {
+    if (!confirmAction) return;
+
+    if (!currentUser?.uid) {
+      setError(
+        "You must be logged in as an administrator."
+      );
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+
+    const donorId = confirmAction.donor.id;
+    const actionType = confirmAction.type;
+
+    try {
+      if (actionType === "archive") {
+        await updateDoc(doc(db, "donors", donorId), {
+          applicationStatus: "archived",
+          donorStatus: "archived",
+          archivedAt: serverTimestamp(),
+          archivedBy: currentUser.uid,
+          updatedAt: serverTimestamp(),
+        });
+
+        setDonors((previous) =>
+          previous.map((item) =>
+            item.id === donorId
+              ? {
+                  ...item,
+                  applicationStatus: "archived",
+                  donorStatus: "archived",
+                  status: "archived",
+                }
+              : item
+          )
+        );
+      } else if (actionType === "delete") {
+        await deleteDoc(doc(db, "donors", donorId));
+
+        setDonors((previous) =>
+          previous.filter((item) => item.id !== donorId)
+        );
+      }
+
+      if (selectedDonor?.id === donorId) {
+        setSelectedDonor(null);
+      }
+
+      setConfirmAction(null);
     } catch (err) {
-      console.error(`${actionType} failed:`, err);
-      alert(`Failed to ${actionType} application: ${err.message}`);
+      console.error(
+        `Failed to ${actionType} donor:`,
+        err
+      );
+
+      setError(
+        err.message ||
+          `Could not ${actionType} application.`
+      );
+    } finally {
+      setBusy(false);
     }
   };
 
-  // Filter and Search Logic
-  const filteredDonors = donors.filter((donor) => {
-    const donorName = (donor.fullName || donor.displayName || "").toLowerCase();
-    const chapter = (donor.chapter || "").toLowerCase();
-    const bloodType = (donor.bloodType || "").toLowerCase();
-    const donorStatus = (donor.donorStatus || donor.status || "pending").toLowerCase();
-    const queryText = searchQuery.toLowerCase();
+  if (loading) {
+    return <LoadingSpinner />;
+  }
 
-    // Hide archived items from this view list
-    if (donorStatus === "archived") return false;
-
-    if (selectedStatus && donorStatus !== selectedStatus.toLowerCase()) return false;
-    if (selectedBloodType && bloodType !== selectedBloodType.toLowerCase()) return false;
-
-    if (filterCategory === "chapter") {
-      return chapter.includes(queryText);
-    } else {
-      return donorName.includes(queryText);
-    }
-  });
-
-  if (loading) return <LoadingSpinner />;
-
+  // Donor details and appointment scheduling.
   if (selectedDonor) {
-    return <DonorDetail donor={selectedDonor} onBack={() => setSelectedDonor(null)} />;
+    return (
+      <DonorDetail
+        donor={selectedDonor}
+        onBack={() => setSelectedDonor(null)}
+        onUpdateStatus={handleStatusUpdate}
+        onScheduleAppointment={handleScheduleAppointment}
+      />
+    );
   }
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto p-6">
-      {/* Search & Filter Header Card */}
-      <div className="bg-white p-5 rounded-2xl shadow-xs border border-gray-200 space-y-4">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Pending Donor Applications</h1>
-          <p className="text-xs text-gray-500">Review screening questions, IDs, and manage donor status</p>
-        </div>
+    <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+      <header className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h1 className="text-xl font-bold text-gray-900">
+          Donor Applications
+        </h1>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
-          {/* Status Filter */}
+        <p className="mt-1 text-sm text-gray-500">
+          Review applications and approve eligible applicants.
+          Approval does not activate a donor. Appointment,
+          screening, collection, and activation are separate
+          steps.
+        </p>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <select
             value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-700 font-medium cursor-pointer"
+            onChange={(event) =>
+              setSelectedStatus(event.target.value)
+            }
+            className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm"
+            aria-label="Filter by application status"
           >
             <option value="">All Statuses</option>
             <option value="pending">Pending</option>
@@ -114,132 +437,200 @@ export default function PendingDonorsPage() {
             <option value="rejected">Rejected</option>
           </select>
 
-          {/* Blood Type Filter */}
           <select
             value={selectedBloodType}
-            onChange={(e) => setSelectedBloodType(e.target.value)}
-            className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-700 font-medium cursor-pointer"
+            onChange={(event) =>
+              setSelectedBloodType(event.target.value)
+            }
+            className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm"
+            aria-label="Filter by blood type"
           >
             <option value="">All Blood Types</option>
-            {bloodTypesList.map((type) => (
-              <option key={type} value={type}>{type}</option>
+            {BLOOD_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
             ))}
           </select>
 
-          {/* Filter Category Select */}
-          <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-700">
-            <LuFilter size={14} className="text-gray-400 shrink-0" />
+          <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3">
+            <Filter
+              size={16}
+              className="shrink-0 text-gray-400"
+            />
+
             <select
               value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="bg-transparent focus:outline-none cursor-pointer font-medium text-gray-700 w-full"
+              onChange={(event) =>
+                setFilterCategory(event.target.value)
+              }
+              className="w-full bg-transparent py-2.5 text-sm outline-none"
+              aria-label="Search category"
             >
-              <option value="donorName">Donor Name</option>
-              <option value="chapter">Chapter</option>
+              <option value="name">Donor Name</option>
+              <option value="birthday">Birthday</option>
             </select>
           </div>
 
-          {/* Search Query Input */}
-          <div className="relative w-full">
-            <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none text-gray-400">
-              <LuSearch size={16} />
-            </span>
+          <div className="relative">
+            <Search
+              size={16}
+              className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+
             <input
-              type="text"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={`Search by ${filterCategory === "donorName" ? "name" : "chapter"}...`}
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-4 py-2 text-xs text-gray-800 focus:outline-none"
+              onChange={(event) =>
+                setSearchQuery(event.target.value)
+              }
+              placeholder={
+                filterCategory === "name"
+                  ? "Search by name..."
+                  : "Search birthday..."
+              }
+              className="w-full rounded-xl border border-gray-200 bg-gray-50 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-blue-400"
             />
           </div>
         </div>
-      </div>
+      </header>
 
-      {error && <div className="p-4 bg-red-100 text-red-700 rounded-xl text-xs">{error}</div>}
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+        >
+          <AlertCircle
+            size={18}
+            className="mt-0.5 shrink-0"
+          />
+          {error}
+        </div>
+      )}
 
-      {/* Donors Table */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-xs overflow-hidden">
-        {filteredDonors.length === 0 ? (
-          <div className="p-12 text-center text-sm font-semibold text-gray-500">
-            No donor applications found matching your filters.
+      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+        {filtered.length === 0 ? (
+          <div className="p-12 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100">
+              <Search
+                size={21}
+                className="text-gray-400"
+              />
+            </div>
+
+            <p className="font-semibold text-gray-700">
+              No donor applications found.
+            </p>
+
+            <p className="mt-1 text-sm text-gray-500">
+              Try changing your filters or search.
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full border-collapse text-left">
               <thead>
-                <tr className="border-b border-gray-100 text-[11px] font-bold text-gray-400 uppercase tracking-wider bg-gray-50/50">
-                  <th className="p-4">Donor Name</th>
+                <tr className="border-b bg-gray-50 text-[11px] font-bold uppercase tracking-wider text-gray-500">
+                  <th className="p-4">Donor</th>
                   <th className="p-4">Blood Type</th>
-                  <th className="p-4">Chapter</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4">Last Donation</th>
-                  <th className="p-4 text-right">Actions</th>
+                  <th className="p-4">Birthday</th>
+                  <th className="p-4">
+                    Application Status
+                  </th>
+                  <th className="p-4">
+                    Last Donation
+                  </th>
+                  <th className="p-4 text-right">
+                    Actions
+                  </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100 text-xs text-gray-600">
-                {filteredDonors.map((donor) => {
-                  const donorName = donor.fullName || donor.displayName || "Anonymous User";
-                  const donorStatus = donor.donorStatus || donor.status || "pending";
+
+              <tbody className="divide-y divide-gray-100 text-sm text-gray-600">
+                {filtered.map((donor) => {
+                  const status = statusOf(donor);
+
                   return (
-                    <tr key={donor.id} className="hover:bg-gray-50/80 transition-colors">
-                      <td className="p-4 font-semibold text-gray-900">
-                        {donorName}
-                        <span className="block font-normal text-[11px] text-gray-400">{donor.email}</span>
-                      </td>
+                    <tr
+                      key={donor.id}
+                      className="transition hover:bg-gray-50"
+                    >
                       <td className="p-4">
-                        <span className="px-2.5 py-1 bg-red-50 text-[#D32F2F] font-extrabold rounded-full border border-red-100">
+                        <p className="font-semibold text-gray-900">
+                          {donorName(donor)}
+                        </p>
+
+                        <span className="mt-1 block text-xs font-normal text-gray-400">
+                          {donor.email ||
+                            donor.userEmail ||
+                            "No email provided"}
+                        </span>
+                      </td>
+
+                      <td className="p-4">
+                        <span className="rounded-full border border-red-100 bg-red-50 px-2.5 py-1 font-bold text-red-700">
                           {donor.bloodType || "N/A"}
                         </span>
                       </td>
-                      <td className="p-4">{donor.chapter || "N/A"}</td>
+
                       <td className="p-4">
-                        <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
-                          donorStatus === "approved" 
-                            ? "bg-emerald-100 text-emerald-800" 
-                            : donorStatus === "rejected"
-                            ? "bg-rose-100 text-rose-800"
-                            : "bg-amber-100 text-amber-800"
-                        }`}>
-                          {donorStatus}
-                        </span>
+                        {formatDate(
+                          donor.birthday ||
+                          donor.birthDate
+                        )}
                       </td>
+
                       <td className="p-4">
-                        {donor.lastDonationDate 
-                          ? new Date(donor.lastDonationDate.seconds ? donor.lastDonationDate.seconds * 1000 : donor.lastDonationDate).toLocaleDateString() 
-                          : "Never"}
+                        <StatusBadge status={status} />
                       </td>
-                      <td className="p-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
+
+                      <td className="p-4">
+                        {formatDate(
+                          donor.lastDonationDate
+                        )}
+                      </td>
+
+                      <td className="p-4">
+                        <div className="flex items-center justify-end gap-2">
                           <button
-                            title="View Details"
-                            onClick={() => setSelectedDonor(donor)}
-                            className="p-1.5 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors text-gray-500"
+                            type="button"
+                            title="View application"
+                            aria-label={`View ${donorName(donor)}`}
+                            onClick={() =>
+                              setSelectedDonor(donor)
+                            }
+                            className="rounded-lg p-2 hover:bg-blue-50 hover:text-blue-600"
                           >
-                            <LuEye size={17} />
+                            <Eye size={17} />
                           </button>
+
                           <button
-                            title="Archive Application"
-                            onClick={() => setConfirmModal({
-                              isOpen: true,
-                              actionType: 'archive',
-                              donorId: donor.id,
-                              donorName: donorName
-                            })}
-                            className="p-1.5 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors text-gray-500"
+                            type="button"
+                            title="Archive application"
+                            aria-label={`Archive ${donorName(donor)}`}
+                            onClick={() =>
+                              setConfirmAction({
+                                type: "archive",
+                                donor,
+                              })
+                            }
+                            className="rounded-lg p-2 hover:bg-amber-50 hover:text-amber-600"
                           >
-                            <LuArchive size={17} />
+                            <Archive size={17} />
                           </button>
+
                           <button
-                            title="Delete Application"
-                            onClick={() => setConfirmModal({
-                              isOpen: true,
-                              actionType: 'delete',
-                              donorId: donor.id,
-                              donorName: donorName
-                            })}
-                            className="p-1.5 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors text-gray-500"
+                            type="button"
+                            title="Delete permanently"
+                            aria-label={`Delete ${donorName(donor)}`}
+                            onClick={() =>
+                              setConfirmAction({
+                                type: "delete",
+                                donor,
+                              })
+                            }
+                            className="rounded-lg p-2 hover:bg-rose-50 hover:text-rose-600"
                           >
-                            <LuTrash2 size={17} />
+                            <Trash2 size={17} />
                           </button>
                         </div>
                       </td>
@@ -252,33 +643,59 @@ export default function PendingDonorsPage() {
         )}
       </div>
 
-      {/* Custom Confirmation Modal */}
-      {confirmModal.isOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
-            <h3 className="text-lg font-bold text-gray-900 capitalize">
-              Confirm {confirmModal.actionType}
-            </h3>
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <h2 className="text-lg font-bold capitalize text-gray-900">
+              Confirm {confirmAction.type}
+            </h2>
+
             <p className="text-sm text-gray-600">
-              Are you sure you want to <span className="font-semibold">{confirmModal.actionType}</span> the application for{" "}
-              <span className="font-semibold text-gray-900">{confirmModal.donorName}</span>?
+              Are you sure you want to{" "}
+              {confirmAction.type} the application
+              for{" "}
+              <strong>
+                {donorName(confirmAction.donor)}
+              </strong>
+              ?
             </p>
-            <div className="flex gap-3 pt-4">
+
+            {confirmAction.type === "delete" && (
+              <p className="text-sm font-semibold text-red-600">
+                This permanently deletes the donor
+                document and cannot be undone.
+              </p>
+            )}
+
+            <div className="flex gap-3">
               <button
-                onClick={() => setConfirmModal({ isOpen: false, actionType: null, donorId: null, donorName: '' })}
-                className="flex-1 px-4 py-2.5 text-xs font-semibold text-gray-700 border border-gray-300 hover:bg-gray-50 rounded-xl transition-colors"
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  setConfirmAction(null)
+                }
+                className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-sm hover:bg-gray-50 disabled:opacity-50"
               >
                 Cancel
               </button>
+
               <button
-                onClick={handleConfirmAction}
-                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs ${
-                  confirmModal.actionType === 'delete'
+                type="button"
+                disabled={busy}
+                onClick={runConfirmAction}
+                className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
+                  confirmAction.type === "delete"
                     ? "bg-rose-600 hover:bg-rose-700"
                     : "bg-amber-600 hover:bg-amber-700"
                 }`}
               >
-                Yes, {confirmModal.actionType}
+                {busy
+                  ? "Please wait..."
+                  : `Yes, ${confirmAction.type}`}
               </button>
             </div>
           </div>

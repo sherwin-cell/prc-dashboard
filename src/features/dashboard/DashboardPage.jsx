@@ -39,16 +39,16 @@ const DashboardPage = () => {
           .filter(req => (req.status || "pending").toLowerCase() !== "archived");
 
         // Fetch announcements count
-        const announcementsSnapshot = await getDocs(collection(db, "announcements"));
-        const activeAnnouncementsCount = announcementsSnapshot.docs.filter(
-          doc => doc.data().status !== "Archived"
-        ).length;
+        // const announcementsSnapshot = await getDocs(collection(db, "announcements"));
+        // const activeAnnouncementsCount = announcementsSnapshot.docs.filter(
+        //   doc => doc.data().status !== "Archived"
+        // ).length;
 
-        setStats({
-          pendingDonors: pendingDonorsCount,
-          activeRequests: activeRequestsList.length,
-          publishedAnnouncements: activeAnnouncementsCount,
-        });
+        // setStats({
+        //   pendingDonors: pendingDonorsCount,
+        //   activeRequests: activeRequestsList.length,
+        //   publishedAnnouncements: activeAnnouncementsCount,
+        // });
 
         // Set recent requests for the feed list (top 4)
         setRecentRequests(activeRequestsList.slice(0, 4));

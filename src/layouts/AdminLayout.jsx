@@ -15,6 +15,9 @@ import {
   LuChevronUp,
   LuArchive,
   LuEye,
+  LuCalendarClock,
+  LuClipboardCheck,
+  LuHeartPulse,
 } from "react-icons/lu";
 
 const AdminLayout = () => {
@@ -46,9 +49,8 @@ const AdminLayout = () => {
     <div className="min-h-screen bg-[#F5F7FA] flex">
       {/* Sidebar Navigation */}
       <aside
-        className={`${
-          isSidebarCollapsed ? "w-20" : "w-64"
-        } bg-white border-r border-gray-200 flex flex-col justify-between shrink-0 fixed inset-y-0 left-0 z-20 transition-all duration-300 ease-in-out`}
+        className={`${isSidebarCollapsed ? "w-20" : "w-64"
+          } bg-white border-r border-gray-200 flex flex-col justify-between shrink-0 fixed inset-y-0 left-0 z-20 transition-all duration-300 ease-in-out`}
       >
         <div>
           {/* Brand Header & Toggle */}
@@ -102,8 +104,7 @@ const AdminLayout = () => {
               to="/"
               end
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                  isActive ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
                 } ${isSidebarCollapsed ? "justify-center" : ""}`
               }
             >
@@ -114,8 +115,7 @@ const AdminLayout = () => {
             <NavLink
               to="/users"
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                  isActive ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
                 } ${isSidebarCollapsed ? "justify-center" : ""}`
               }
             >
@@ -128,9 +128,8 @@ const AdminLayout = () => {
               <div>
                 <button
                   onClick={() => setIsBloodRequestsOpen(!isBloodRequestsOpen)}
-                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    isBloodRequestsPath ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50"
-                  }`}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isBloodRequestsPath ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50"
+                    }`}
                 >
                   <div className="flex items-center gap-3">
                     <LuDroplet size={18} className="shrink-0" />
@@ -145,8 +144,7 @@ const AdminLayout = () => {
                       to="/blood-requests"
                       end
                       className={({ isActive }) =>
-                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                         }`
                       }
                     >
@@ -156,8 +154,7 @@ const AdminLayout = () => {
                     <NavLink
                       to="/blood-requests/archive"
                       className={({ isActive }) =>
-                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                         }`
                       }
                     >
@@ -172,8 +169,7 @@ const AdminLayout = () => {
                 to="/blood-requests"
                 title="Blood Requests"
                 className={({ isActive }) =>
-                  `flex items-center justify-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    isActive ? "bg-red-50 text-[#D32F2F]" : "text-gray-600 hover:bg-gray-50"
+                  `flex items-center justify-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive ? "bg-red-50 text-[#D32F2F]" : "text-gray-600 hover:bg-gray-50"
                   }`
                 }
               >
@@ -186,9 +182,8 @@ const AdminLayout = () => {
               <div>
                 <button
                   onClick={() => setIsDonorsOpen(!isDonorsOpen)}
-                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    isDonorsPath ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50"
-                  }`}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isDonorsPath ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50"
+                    }`}
                 >
                   <div className="flex items-center gap-3">
                     <LuUsers size={18} className="shrink-0" />
@@ -203,19 +198,61 @@ const AdminLayout = () => {
                       to="/donors"
                       end
                       className={({ isActive }) =>
-                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        `flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive
+                          ? "bg-red-100/60 text-[#D32F2F]"
+                          : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                         }`
                       }
                     >
                       <LuUsers size={14} />
-                      <span>Pending Donors</span>
+                      <span>Donor Applications</span>
                     </NavLink>
+
+                    <NavLink
+                      to="/donors/appointments"
+                      className={({ isActive }) =>
+                        `flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive
+                          ? "bg-red-100/60 text-[#D32F2F]"
+                          : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        }`
+                      }
+                    >
+                      <LuCalendarClock size={14} />
+                      <span>Appointments</span>
+                    </NavLink>
+
+                    <NavLink
+                      to="/donors/screening"
+                      className={({ isActive }) =>
+                        `flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive
+                          ? "bg-red-100/60 text-[#D32F2F]"
+                          : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        }`
+                      }
+                    >
+                      <LuClipboardCheck size={14} />
+                      <span>Screening &amp; Collection</span>
+                    </NavLink>
+
+                    <NavLink
+                      to="/donors/active"
+                      className={({ isActive }) =>
+                        `flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive
+                          ? "bg-red-100/60 text-[#D32F2F]"
+                          : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        }`
+                      }
+                    >
+                      <LuHeartPulse size={14} />
+                      <span>Active Donors</span>
+                    </NavLink>
+
                     <NavLink
                       to="/donors/archive"
                       className={({ isActive }) =>
-                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        `flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive
+                          ? "bg-red-100/60 text-[#D32F2F]"
+                          : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                         }`
                       }
                     >
@@ -230,8 +267,7 @@ const AdminLayout = () => {
                 to="/donors"
                 title="Apply Donors"
                 className={({ isActive }) =>
-                  `flex items-center justify-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    isActive ? "bg-red-50 text-[#D32F2F]" : "text-gray-600 hover:bg-gray-50"
+                  `flex items-center justify-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive ? "bg-red-50 text-[#D32F2F]" : "text-gray-600 hover:bg-gray-50"
                   }`
                 }
               >
@@ -242,8 +278,7 @@ const AdminLayout = () => {
             <NavLink
               to="/chats"
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                  isActive ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
                 } ${isSidebarCollapsed ? "justify-center" : ""}`
               }
             >
@@ -252,13 +287,12 @@ const AdminLayout = () => {
             </NavLink>
 
             {/* Announcements Accordion Menu */}
-            {!isSidebarCollapsed ? (
+            {/* {!isSidebarCollapsed ? (
               <div>
                 <button
                   onClick={() => setIsAnnouncementsOpen(!isAnnouncementsOpen)}
-                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    isAnnouncementsPath ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50"
-                  }`}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isAnnouncementsPath ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50"
+                    }`}
                 >
                   <div className="flex items-center gap-3">
                     <LuMegaphone size={18} className="shrink-0" />
@@ -273,8 +307,7 @@ const AdminLayout = () => {
                       to="/announcements"
                       end
                       className={({ isActive }) =>
-                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                         }`
                       }
                     >
@@ -284,8 +317,7 @@ const AdminLayout = () => {
                     <NavLink
                       to="/announcements/published"
                       className={({ isActive }) =>
-                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                         }`
                       }
                     >
@@ -295,8 +327,7 @@ const AdminLayout = () => {
                     <NavLink
                       to="/announcements/archive"
                       className={({ isActive }) =>
-                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                        `flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${isActive ? "bg-red-100/60 text-[#D32F2F]" : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
                         }`
                       }
                     >
@@ -307,18 +338,17 @@ const AdminLayout = () => {
                 )}
               </div>
             ) : (
-              <NavLink
-                to="/announcements"
-                title="Announcements"
-                className={({ isActive }) =>
-                  `flex items-center justify-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    isActive ? "bg-red-50 text-[#D32F2F]" : "text-gray-600 hover:bg-gray-50"
-                  }`
-                }
-              >
-                <LuMegaphone size={18} />
-              </NavLink>
-            )}
+              // <NavLink
+              //   to="/announcements"
+              //   title="Announcements"
+              //   className={({ isActive }) =>
+              //     `flex items-center justify-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive ? "bg-red-50 text-[#D32F2F]" : "text-gray-600 hover:bg-gray-50"
+              //     }`
+              //   }
+              // >
+              //   <LuMegaphone size={18} />
+              // </NavLink>
+            )} */}
           </nav>
         </div>
 
@@ -343,9 +373,8 @@ const AdminLayout = () => {
           <button
             onClick={handleLogout}
             title="Sign Out"
-            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 rounded-lg transition-colors ${
-              isSidebarCollapsed ? "justify-center" : ""
-            }`}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 rounded-lg transition-colors ${isSidebarCollapsed ? "justify-center" : ""
+              }`}
           >
             <LuLogOut size={16} className="shrink-0" />
             {!isSidebarCollapsed && <span>Sign Out</span>}
@@ -355,9 +384,8 @@ const AdminLayout = () => {
 
       {/* Main Content Area */}
       <div
-        className={`flex-1 flex flex-col min-h-screen transition-all duration-300 ease-in-out ${
-          isSidebarCollapsed ? "pl-20" : "pl-64"
-        }`}
+        className={`flex-1 flex flex-col min-h-screen transition-all duration-300 ease-in-out ${isSidebarCollapsed ? "pl-20" : "pl-64"
+          }`}
       >
         <header className="h-16 bg-white border-b border-gray-200 px-8 flex items-center justify-end sticky top-0 z-10">
           <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors relative">

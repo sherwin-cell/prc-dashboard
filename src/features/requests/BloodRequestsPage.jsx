@@ -14,10 +14,9 @@ const BloodRequestsPage = ({ onViewDetail }) => {
   
   const [banner, setBanner] = useState({ show: false, message: "" });
 
-  // Custom Confirmation Modal State
   const [confirmModal, setConfirmModal] = useState({
     isOpen: false,
-    actionType: null, // 'archive' or 'delete'
+    actionType: null, 
     requestItem: null,
   });
 
@@ -71,11 +70,10 @@ const BloodRequestsPage = ({ onViewDetail }) => {
   const filteredRequests = requests.filter((req) => {
     const patientName = (req.patientName || "").toLowerCase();
     const bloodType = (req.bloodType || "").toLowerCase();
-    const hospital = (req.hospital || "").toLowerCase();
+    const hospital = (req.hospitalName || req.hospital || "").toLowerCase();
     const status = (req.status || "pending").toLowerCase();
     const queryText = searchQuery.toLowerCase();
 
-    // HIDE ARCHIVED ITEMS FROM THIS MAIN TABLE LIST
     if (status === "archived") return false;
 
     if (selectedStatus && status !== selectedStatus.toLowerCase()) return false;
@@ -104,7 +102,7 @@ const BloodRequestsPage = ({ onViewDetail }) => {
       <div className="bg-white p-5 rounded-2xl shadow-xs border border-gray-200 space-y-4">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Blood Requests Dashboard</h1>
-          <p className="text-xs text-gray-500">Manage active requests, search by name or hospital</p>
+          <p className="text-xs text-gray-500">Manage active requests, search by patient name or hospital</p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
@@ -186,7 +184,7 @@ const BloodRequestsPage = ({ onViewDetail }) => {
                     </span>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">{req.component || "Whole Blood"}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{req.hospital || "N/A"}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{req.hospitalName || req.hospital || "N/A"}</td>
                   <td className="px-6 py-4 text-sm">
                     <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
                       req.status === "approved" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
@@ -228,7 +226,6 @@ const BloodRequestsPage = ({ onViewDetail }) => {
         </table>
       </div>
 
-      {/* Custom Confirmation Modal */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
