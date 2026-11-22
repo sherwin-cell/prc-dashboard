@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
 import { collection, getDocs, query, orderBy, doc, deleteDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { LuSearch, LuFilter, LuEye, LuArchive, LuTrash2, LuCheck } from "react-icons/lu";
+import { RequestStatus, requestStatusClasses, requestStatusLabel } from "../../constants/statuses";
 
 const BloodRequestsPage = ({ onViewDetail }) => {
   const [requests, setRequests] = useState([]);
@@ -76,7 +77,13 @@ const BloodRequestsPage = ({ onViewDetail }) => {
 
     if (status === "archived") return false;
 
-    if (selectedStatus && status !== selectedStatus.toLowerCase()) return false;
+    // "approved" and the legacy "active" both mean open to donors.
+    const openAliases = [RequestStatus.approved, RequestStatus.active];
+    if (selectedStatus) {
+      const wanted = selectedStatus.toLowerCase();
+      const matches = openAliases.includes(wanted) ? openAliases.includes(status) : status === wanted;
+      if (!matches) return false;
+    }
     if (selectedBloodType && bloodType !== selectedBloodType.toLowerCase()) return false;
 
     if (filterCategory === "hospital") {
@@ -112,9 +119,13 @@ const BloodRequestsPage = ({ onViewDetail }) => {
             className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-700 font-medium cursor-pointer"
           >
             <option value="">All Statuses</option>
-            <option value="pending">Pending</option>
-            <option value="approved">Approved</option>
+            <option value="pending">Pending review</option>
+            <option value="approved">Open to donors</option>
+            <option value="matched">Donor matched</option>
+            <option value="fulfilled">Fulfilled</option>
+            <option value="cancelled">Cancelled by requester</option>
             <option value="rejected">Rejected</option>
+            <option value="expired">Expired</option>
           </select>
 
           <select
@@ -176,7 +187,11 @@ const BloodRequestsPage = ({ onViewDetail }) => {
               </tr>
             ) : (
               filteredRequests.map((req) => (
-                <tr key={req.id} onClick={() => onViewDetail(req)} className="hover:bg-gray-50 cursor-pointer">
+                <tr
+                  key={req.id}
+                  onClick={() => onViewDetail(req)}
+                  className={`hover:bg-gray-50 cursor-pointer ${req.status === RequestStatus.cancelled ? "opacity-60" : ""}`}
+                >
                   <td className="px-6 py-4 text-sm font-medium text-gray-900">{req.patientName || "Unnamed"}</td>
                   <td className="px-6 py-4 text-sm">
                     <span className="px-2.5 py-1 bg-red-50 text-[#D32F2F] text-xs font-bold rounded-full border border-red-100">
@@ -186,10 +201,8 @@ const BloodRequestsPage = ({ onViewDetail }) => {
                   <td className="px-6 py-4 text-sm text-gray-500">{req.component || "Whole Blood"}</td>
                   <td className="px-6 py-4 text-sm text-gray-500">{req.hospitalName || req.hospital || "N/A"}</td>
                   <td className="px-6 py-4 text-sm">
-                    <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
-                      req.status === "approved" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
-                    }`}>
-                      {req.status || "pending"}
+                    <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase whitespace-nowrap ${requestStatusClasses(req.status)}`}>
+                      {requestStatusLabel(req.status)}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right text-sm">

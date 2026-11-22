@@ -80,6 +80,7 @@ export default function DonorDetail({
   const [showReject, setShowReject] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [reason, setReason] = useState('');
+  const [reapplicationAllowed, setReapplicationAllowed] = useState(null);
   const [busy, setBusy] = useState(false);
   const [scheduleBusy, setScheduleBusy] = useState(false);
   const [error, setError] = useState('');
@@ -168,7 +169,8 @@ export default function DonorDetail({
       const result = await onUpdateStatus(
         data.id,
         nextStatus,
-        nextStatus === 'rejected' ? reason.trim() : ''
+        nextStatus === 'rejected' ? reason.trim() : '',
+        nextStatus === 'rejected' ? reapplicationAllowed : null
       );
 
       if (result?.success === false) {
@@ -182,11 +184,14 @@ export default function DonorDetail({
         status: nextStatus,
         rejectionReason:
           nextStatus === 'rejected' ? reason.trim() : '',
+        reapplicationAllowed:
+          nextStatus === 'rejected' ? reapplicationAllowed === true : false,
       }));
 
       setShowApprove(false);
       setShowReject(false);
       setReason('');
+      setReapplicationAllowed(null);
     } catch (err) {
       setError(err.message || 'Could not update application.');
     } finally {
@@ -437,7 +442,16 @@ export default function DonorDetail({
             <p>
               <span className="text-gray-500">Last donation:</span>
               <br />
-              {formatDate(data.lastDonationDate)}
+              {formatDate(
+                data.lastDonationDate || data.selfReportedLastDonationDate
+              )}
+              {!data.lastDonationDate &&
+                data.selfReportedLastDonationDate && (
+                  <span className="text-xs text-gray-500">
+                    {' '}
+                    (applicant-reported)
+                  </span>
+                )}
             </p>
             <p>
               <span className="text-gray-500">
@@ -448,7 +462,11 @@ export default function DonorDetail({
                 ? 'Yes'
                 : data.isAvailableForDonation === false
                   ? 'No'
-                  : 'N/A'}
+                  : data.selfReportedAvailable === true
+                    ? 'Applicant says yes (not confirmed by PRC)'
+                    : data.selfReportedAvailable === false
+                      ? 'Applicant says no (not confirmed by PRC)'
+                      : 'N/A'}
             </p>
             <p>
               <span className="text-gray-500">Activation:</span>
@@ -529,6 +547,10 @@ export default function DonorDetail({
         {status === 'rejected' && data.rejectionReason && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             <strong>Rejection reason:</strong> {data.rejectionReason}
+            <p className="mt-1">
+              <strong>Reapplication allowed:</strong>{' '}
+              {data.reapplicationAllowed === true ? 'Yes' : 'No'}
+            </p>
           </div>
         )}
 
@@ -851,6 +873,7 @@ export default function DonorDetail({
             if (!busy) {
               setShowReject(false);
               setReason('');
+              setReapplicationAllowed(null);
             }
           }}
         >
@@ -867,6 +890,32 @@ export default function DonorDetail({
             placeholder="Explain why this application is being rejected..."
           />
 
+          <fieldset className="mt-4">
+            <legend className="mb-2 text-sm font-semibold">
+              Reapplication Allowed
+            </legend>
+            <div className="flex gap-6 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="reapplicationAllowed"
+                  checked={reapplicationAllowed === true}
+                  onChange={() => setReapplicationAllowed(true)}
+                />
+                Yes
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="reapplicationAllowed"
+                  checked={reapplicationAllowed === false}
+                  onChange={() => setReapplicationAllowed(false)}
+                />
+                No
+              </label>
+            </div>
+          </fieldset>
+
           <div className="mt-5 flex justify-end gap-3">
             <button
               type="button"
@@ -874,6 +923,7 @@ export default function DonorDetail({
               onClick={() => {
                 setShowReject(false);
                 setReason('');
+                setReapplicationAllowed(null);
               }}
               className="rounded-xl border px-4 py-2.5 text-sm"
             >
@@ -882,7 +932,7 @@ export default function DonorDetail({
 
             <button
               type="button"
-              disabled={busy || !reason.trim()}
+              disabled={busy || !reason.trim() || reapplicationAllowed === null}
               onClick={() => submitStatus('rejected')}
               className="rounded-xl bg-red-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"
             >

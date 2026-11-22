@@ -1,18 +1,73 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
-import { LuShieldCheck, LuArrowLeft, LuFileText } from "react-icons/lu";
+import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan } from "react-icons/lu";
+import { useAuth } from "../../context/AuthContext";
+import RequestOffersList from "../../components/admin/RequestOffersList";
+import {
+  markRequestFulfilled,
+  subscribeToRequest,
+} from "../../services/firestore/requestService";
+import {
+  RequestStatus,
+  isRequestOpen,
+  requestStatusClasses,
+  requestStatusLabel,
+} from "../../constants/statuses";
+
+const CONFIRM_COPY = {
+  approve: { title: "Confirm Approval", verb: "approve", button: "Yes, Approve", color: "bg-emerald-600 hover:bg-emerald-700" },
+  reject: { title: "Confirm Rejection", verb: "reject", button: "Yes, Reject", color: "bg-rose-600 hover:bg-rose-700" },
+  fulfill: { title: "Mark Request Fulfilled", verb: "mark as fulfilled", button: "Yes, Mark Fulfilled", color: "bg-blue-600 hover:bg-blue-700" },
+};
 
 const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
+  const { currentUser } = useAuth();
   const [reqData, setReqData] = useState(request);
+  const [actionError, setActionError] = useState("");
+
+  // Keep the request live so a cancellation from the mobile app shows up
+  // immediately and PRC stops acting on it.
+  useEffect(() => {
+    return subscribeToRequest(
+      request.id,
+      (latest) => {
+        if (latest) setReqData(latest);
+      },
+      (error) => console.error("Error listening to blood request:", error)
+    );
+  }, [request.id]);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, actionType: null });
 
   const handleConfirmAction = async () => {
     const actionType = confirmModal.actionType;
     if (!actionType) return;
+    setActionError("");
+
+    if (actionType === "fulfill") {
+      const result = await markRequestFulfilled(reqData.id, currentUser);
+      if (result.success) {
+        const updated = { ...reqData, status: RequestStatus.fulfilled };
+        setReqData(updated);
+        if (onUpdateStatus) onUpdateStatus(updated);
+      } else {
+        setActionError(result.error || "Could not mark the request fulfilled.");
+      }
+      setConfirmModal({ isOpen: false, actionType: null });
+      return;
+    }
+
+    if (reqData.status !== RequestStatus.pending) {
+      setActionError(`This request is "${requestStatusLabel(reqData.status)}" and can no longer be reviewed.`);
+      setConfirmModal({ isOpen: false, actionType: null });
+      return;
+    }
 
     try {
-      const newStatus = actionType === "approve" ? "approved" : "rejected";
+      // A published (PRC-approved) blood request is "active"; the ID
+      // verification submission keeps its own approved/rejected status.
+      const newStatus = actionType === "approve" ? "active" : "rejected";
+      const idVerificationStatus = actionType === "approve" ? "approved" : "rejected";
       const submissionId = reqData.idVerificationSubmissionId;
 
       const batch = writeBatch(db);
@@ -23,10 +78,27 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
         updatedAt: serverTimestamp(),
       });
 
+      // Anonymized summary shown to donors (no patient identity, requester
+      // contact details or Blood Request Form). Only for published requests.
+      if (actionType === "approve") {
+        batch.set(doc(db, "request_summaries", reqData.id), {
+          requestId: reqData.id,
+          bloodType: reqData.bloodType ?? null,
+          component: reqData.component ?? null,
+          unitsRequired: reqData.unitsRequired ?? null,
+          urgency: reqData.urgency ?? null,
+          neededByDate:
+            reqData.neededByDate ?? reqData.neededBy ?? reqData.requiredDate ?? null,
+          status: "active",
+          createdAt: reqData.createdAt ?? serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
       if (submissionId) {
         const verificationRef = doc(db, "id_verifications", submissionId);
         batch.update(verificationRef, {
-          status: newStatus,
+          status: idVerificationStatus,
           updatedAt: serverTimestamp(),
         });
       }
@@ -40,6 +112,8 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
       setConfirmModal({ isOpen: false, actionType: null });
     } catch (error) {
       console.error(`Error ${actionType}ing request:`, error);
+      setActionError(error.message || `Could not ${actionType} the request.`);
+      setConfirmModal({ isOpen: false, actionType: null });
     }
   };
 
@@ -68,6 +142,22 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
         </div>
       </div>
 
+      {reqData.status === RequestStatus.cancelled && (
+        <div role="status" className="flex items-start gap-2.5 p-4 bg-gray-100 border border-gray-300 text-gray-800 rounded-2xl text-xs">
+          <LuBan size={18} className="shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold">The requester cancelled this request.</p>
+            <p className="text-gray-600">No further PRC action is needed. Pending donor offers can still be declined to close them out.</p>
+          </div>
+        </div>
+      )}
+
+      {actionError && (
+        <div role="alert" className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-semibold">
+          {actionError}
+        </div>
+      )}
+
       {/* Detailed Card Layout */}
       <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-xs space-y-5">
         {/* Top Info */}
@@ -77,14 +167,9 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs text-gray-500">Status:</span>
               <span
-                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${reqData.status === "approved"
-                    ? "bg-emerald-100 text-emerald-800"
-                    : reqData.status === "rejected"
-                      ? "bg-rose-100 text-rose-800"
-                      : "bg-amber-100 text-amber-800"
-                  }`}
+                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${requestStatusClasses(reqData.status)}`}
               >
-                {reqData.status || "pending"}
+                {requestStatusLabel(reqData.status)}
               </span>
             </div>
           </div>
@@ -290,12 +375,26 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
                 Approve Request
               </button>
             </>
+          ) : isRequestOpen(reqData.status) ? (
+            <button
+              onClick={() => setConfirmModal({ isOpen: true, actionType: "fulfill" })}
+              className="flex-1 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-colors shadow-xs"
+            >
+              Mark Request Fulfilled
+            </button>
           ) : (
             <div className="w-full text-center py-2 text-xs font-medium text-gray-400 bg-gray-50 rounded-xl border border-gray-100 uppercase tracking-wider">
-              Request already {reqData.status}
+              {requestStatusLabel(reqData.status)}
             </div>
           )}
         </div>
+
+        {/* Donor offers (only once PRC has reviewed the request) */}
+        {reqData.status && reqData.status !== RequestStatus.pending && reqData.status !== RequestStatus.rejected && (
+          <div className="border-t border-gray-100 pt-4">
+            <RequestOffersList requestId={reqData.id} requestStatus={reqData.status} />
+          </div>
+        )}
       </div>
 
       {/* Confirmation Modal */}
@@ -303,10 +402,10 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
             <h3 className="text-lg font-bold text-gray-900">
-              Confirm {confirmModal.actionType === "approve" ? "Approval" : "Rejection"}
+              {CONFIRM_COPY[confirmModal.actionType]?.title}
             </h3>
             <p className="text-sm text-gray-600">
-              Are you sure you want to <span className="font-semibold">{confirmModal.actionType}</span> the blood request for{" "}
+              Are you sure you want to <span className="font-semibold">{CONFIRM_COPY[confirmModal.actionType]?.verb}</span> the blood request for{" "}
               <span className="font-semibold text-gray-900">{reqData.patientName}</span>?
             </p>
             <div className="flex gap-3 pt-4">
@@ -318,12 +417,9 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
               </button>
               <button
                 onClick={handleConfirmAction}
-                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs ${confirmModal.actionType === "approve"
-                    ? "bg-emerald-600 hover:bg-emerald-700"
-                    : "bg-rose-600 hover:bg-rose-700"
-                  }`}
+                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs ${CONFIRM_COPY[confirmModal.actionType]?.color}`}
               >
-                Yes, {confirmModal.actionType === "approve" ? "Approve" : "Reject"}
+                {CONFIRM_COPY[confirmModal.actionType]?.button}
               </button>
             </div>
           </div>
@@ -333,4 +429,4 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
   );
 };
 
-export default BloodRequestDetail;
+export default BloodRequestDetail;

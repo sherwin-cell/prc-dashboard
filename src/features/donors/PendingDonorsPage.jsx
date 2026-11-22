@@ -25,7 +25,6 @@ import { useAuth } from "../../context/AuthContext";
 import { db } from "../../firebase/config";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 import DonorDetail from "./DonorDetail";
-import { notifyDonorApplicationStatus } from "../../services/api/donorNotificationService";
 
 const BLOOD_TYPES = [
   "A+", "A-", "B+", "B-",
@@ -164,7 +163,8 @@ export default function PendingDonorsPage() {
   const handleStatusUpdate = async (
     donorId,
     status,
-    reason = ""
+    reason = "",
+    reapplicationAllowed = null
   ) => {
     if (!currentUser?.uid) {
       throw new Error(
@@ -176,7 +176,8 @@ export default function PendingDonorsPage() {
       donorId,
       status,
       currentUser,
-      reason
+      reason,
+      reapplicationAllowed
     );
 
     if (!result?.success) {
@@ -192,6 +193,8 @@ export default function PendingDonorsPage() {
       reviewEventId: result.reviewEventId,
       rejectionReason:
         status === "rejected" ? reason.trim() : "",
+      reapplicationAllowed:
+        status === "rejected" ? reapplicationAllowed === true : false,
     };
 
     setDonors((previous) =>
@@ -208,27 +211,9 @@ export default function PendingDonorsPage() {
         : previous
     );
 
-    // Notification failure should not undo the review.
-    try {
-      const notificationResult =
-        await notifyDonorApplicationStatus({
-          donorId,
-          status,
-          reviewEventId: result.reviewEventId,
-        });
-
-      if (!notificationResult?.success) {
-        console.warn(
-          "Donor application saved, but notification was not fully sent:",
-          notificationResult
-        );
-      }
-    } catch (notificationError) {
-      console.error(
-        "Donor application saved, but notification request failed:",
-        notificationError
-      );
-    }
+    // No notification call here: the backend notification worker sees the
+    // new applicationStatus/reviewEventId in Firestore and notifies the
+    // applicant (in-app record + push) exactly once.
 
     return result;
   };
@@ -585,7 +570,8 @@ export default function PendingDonorsPage() {
 
                       <td className="p-4">
                         {formatDate(
-                          donor.lastDonationDate
+                          donor.lastDonationDate ||
+                            donor.selfReportedLastDonationDate
                         )}
                       </td>
 

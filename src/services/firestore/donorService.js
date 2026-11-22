@@ -384,7 +384,8 @@ export async function updateDonorStatus(
   donorId,
   newStatus,
   adminUser,
-  rejectionReason = ""
+  rejectionReason = "",
+  reapplicationAllowed = null
 ) {
   try {
     if (!donorId) {
@@ -405,6 +406,16 @@ export async function updateDonorStatus(
     ) {
       throw new Error(
         "A rejection reason is required."
+      );
+    }
+
+    // PRC decides whether a rejected applicant may apply again.
+    if (
+      newStatus === "rejected" &&
+      typeof reapplicationAllowed !== "boolean"
+    ) {
+      throw new Error(
+        "Specify whether reapplication is allowed (Yes or No)."
       );
     }
 
@@ -442,6 +453,10 @@ export async function updateDonorStatus(
         newStatus === "rejected"
           ? rejectionReason.trim()
           : "",
+      reapplicationAllowed:
+        newStatus === "rejected"
+          ? reapplicationAllowed
+          : false,
       updatedAt: serverTimestamp(),
     });
 
@@ -450,7 +465,7 @@ export async function updateDonorStatus(
       `UPDATE_DONOR_APPLICATION_${newStatus.toUpperCase()}`,
       donorId,
       newStatus === "rejected"
-        ? `Donor application rejected. Reason: ${rejectionReason.trim()}`
+        ? `Donor application rejected. Reason: ${rejectionReason.trim()}. Reapplication allowed: ${reapplicationAllowed ? "Yes" : "No"}`
         : "Donor application approved. Further workflow steps remain separate."
     );
 
@@ -458,6 +473,8 @@ export async function updateDonorStatus(
       success: true,
       donorId,
       applicationStatus: newStatus,
+      reapplicationAllowed:
+        newStatus === "rejected" ? reapplicationAllowed : false,
       reviewEventId,
     };
   } catch (error) {
