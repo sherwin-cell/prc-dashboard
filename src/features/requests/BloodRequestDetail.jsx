@@ -3,7 +3,6 @@ import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
 import {
   LuArchive,
-  LuArrowLeft,
   LuBan,
   LuBellRing,
   LuCheck,
@@ -97,7 +96,8 @@ const Card = ({ title, icon, children, className = "" }) => (
   </section>
 );
 
-const BloodRequestDetail = ({ request: reqData, requester, onBack }) => {
+// wide: the inspector is expanded to the full workspace (documents beside the fields).
+const BloodRequestDetail = ({ request: reqData, requester, onBack, wide = false }) => {
   const { currentUser } = useAuth();
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
@@ -248,9 +248,6 @@ const BloodRequestDetail = ({ request: reqData, requester, onBack }) => {
       {/* Sticky header: who, what, where it stands, and what PRC can do. */}
       <header className="sticky top-0 z-20 border-b border-gray-200 bg-white/95 px-5 py-4 backdrop-blur">
         <div className="flex flex-wrap items-start gap-3">
-          <button onClick={onBack} className="rounded-full p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden" title="Back to the queue">
-            <LuArrowLeft size={18} />
-          </button>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-lg font-bold text-gray-900">{reqData.patientName || "Unnamed patient"}</h2>
@@ -349,7 +346,7 @@ const BloodRequestDetail = ({ request: reqData, requester, onBack }) => {
         )}
 
         {/* Clinical summary strip */}
-        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-gray-200 bg-gray-200 sm:grid-cols-3 xl:grid-cols-5">
+        <dl className={`grid gap-px overflow-hidden rounded-2xl border border-gray-200 bg-gray-200 ${wide ? "grid-cols-5" : "grid-cols-2"}`}>
           {[
             ["Blood type", <span className="text-lg font-black text-[#D32F2F]">{reqData.bloodType || "?"}</span>],
             ["Units required", <span className="text-lg font-black tabular-nums text-gray-900">{units}</span>],
@@ -373,7 +370,7 @@ const BloodRequestDetail = ({ request: reqData, requester, onBack }) => {
         </dl>
 
         {/* Review: typed fields and checklist beside the documents */}
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className={`grid gap-4 ${wide ? "grid-cols-2" : ""}`}>
           <div className="space-y-4">
             <Card title="Patient profile">
               <dl className="grid grid-cols-2 gap-3">
@@ -454,13 +451,13 @@ const BloodRequestDetail = ({ request: reqData, requester, onBack }) => {
             )}
           </div>
 
-          <div className="xl:sticky xl:top-36 xl:self-start">
+          <div className={wide ? "sticky top-36 self-start" : ""}>
             <DocumentViewer documents={documents} />
           </div>
         </div>
 
         {(reqData.notes || reqData.otherInfo) && (
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className={`grid gap-3 ${wide ? "grid-cols-2" : ""}`}>
             {reqData.notes && (
               <div className="rounded-2xl border border-amber-200/60 bg-amber-50/70 p-3.5 text-xs">
                 <strong className="block text-[10px] font-bold uppercase tracking-wider text-amber-900">Special notes</strong>
