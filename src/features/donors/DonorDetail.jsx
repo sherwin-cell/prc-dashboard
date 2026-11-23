@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -10,7 +10,6 @@ import {
   FileText,
   MapPin,
   ShieldCheck,
-  User,
   X,
   XCircle,
 } from 'lucide-react';
@@ -75,7 +74,10 @@ export default function DonorDetail({
   onUpdateStatus,
   onScheduleAppointment,
 }) {
-  const [data, setData] = useState(donor || {});
+  // Live donor from the parent, plus fields this screen just saved
+  // (shown until the Firestore snapshot catches up).
+  const [overrides, setOverrides] = useState({});
+  const data = { ...(donor || {}), ...overrides };
   const [showApprove, setShowApprove] = useState(false);
   const [showReject, setShowReject] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
@@ -92,13 +94,6 @@ export default function DonorDetail({
     location: '',
     notes: '',
   });
-
-  useEffect(() => {
-    setData(donor || {});
-    setError('');
-    setScheduleError('');
-    setShowSchedule(false);
-  }, [donor]);
 
   const status = String(
     data.applicationStatus ||
@@ -177,7 +172,7 @@ export default function DonorDetail({
         throw new Error(result.error || 'Update failed.');
       }
 
-      setData((old) => ({
+      setOverrides((old) => ({
         ...old,
         applicationStatus: nextStatus,
         donorStatus: nextStatus,
@@ -243,10 +238,10 @@ export default function DonorDetail({
         );
       }
 
-      setData((previous) => ({
+      setOverrides((previous) => ({
         ...previous,
         appointment: {
-          ...previous.appointment,
+          ...(previous.appointment || donor?.appointment),
           ...appointmentForm,
           location: appointmentForm.location.trim(),
           notes: appointmentForm.notes.trim(),

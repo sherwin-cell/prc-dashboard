@@ -3,7 +3,7 @@ import { db } from "../firebase/config";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { LuArchive, LuRotateCcw, LuCheck } from "react-icons/lu";
 import DonorDetail from "../features/donors/DonorDetail";
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "../context/useAuth";
 import { restoreDonorApplication } from "../services/firestore/donorService";
 import { donorApplicationStatus, isDonorLegacyArchived } from "../constants/statuses";
 
@@ -85,7 +85,7 @@ const ArchivedDonors = () => {
   }
 
   if (selectedDonor) {
-    return <DonorDetail donor={selectedDonor} onBack={() => setSelectedDonor(null)} />;
+    return <DonorDetail key={selectedDonor.id} donor={selectedDonor} onBack={() => setSelectedDonor(null)} />;
   }
 
   return (

@@ -10,7 +10,7 @@ import {
   requestStatusLabel,
 } from "../../constants/statuses";
 import { archiveRequest, deleteRequest } from "../../services/firestore/requestService";
-import { useAuth } from "../../context/AuthContext";
+import { useAuth } from "../../context/useAuth";
 
 const FINISH_FIRST =
   "Only finished requests (fulfilled, cancelled, rejected or expired) can be archived or deleted.";

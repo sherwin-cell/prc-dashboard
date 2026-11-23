@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "../context/useAuth";
 import {
   LuLayoutDashboard,
   LuUsers,
@@ -14,6 +14,7 @@ import {
   LuChevronDown,
   LuChevronUp,
   LuArchive,
+  // eslint-disable-next-line no-unused-vars -- deferred Announcements menu (commented out)
   LuEye,
   LuCalendarClock,
   LuClipboardCheck,
@@ -34,6 +35,8 @@ const AdminLayout = () => {
   const [isDonorsOpen, setIsDonorsOpen] = useState(isDonorsPath);
 
   const isAnnouncementsPath = location.pathname.startsWith("/announcements");
+  // Used by the Announcements menu, which is deferred (commented out below).
+  // eslint-disable-next-line no-unused-vars
   const [isAnnouncementsOpen, setIsAnnouncementsOpen] = useState(isAnnouncementsPath);
 
   const handleLogout = async () => {

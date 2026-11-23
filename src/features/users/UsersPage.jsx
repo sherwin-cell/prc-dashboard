@@ -7,7 +7,7 @@ import {
   reviewFaceVerification,
   deleteUserAccount,
 } from "../../services/firestore/userService";
-import { useAuth } from "../../context/AuthContext";
+import { useAuth } from "../../context/useAuth";
 import {
   faceAttemptLabel,
   faceReviewClasses,

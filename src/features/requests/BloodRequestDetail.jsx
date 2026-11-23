@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan, LuBellRing } from "react-icons/lu";
-import { useAuth } from "../../context/AuthContext";
+import { useAuth } from "../../context/useAuth";
 import RequestOffersList from "../../components/admin/RequestOffersList";
 import {
   markRequestFulfilled,

@@ -19,7 +19,7 @@ import { canArchiveDonor, isDonorArchived } from "../../constants/statuses";
 
 const REJECT_FIRST = "Only rejected applications can be archived or deleted.";
 
-import { useAuth } from "../../context/AuthContext";
+import { useAuth } from "../../context/useAuth";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 import DonorDetail from "./DonorDetail";
 
@@ -350,6 +350,7 @@ export default function PendingDonorsPage() {
   if (liveSelectedDonor) {
     return (
       <DonorDetail
+        key={liveSelectedDonor.id}
         donor={liveSelectedDonor}
         onBack={() => setSelectedDonor(null)}
         onUpdateStatus={handleStatusUpdate}
