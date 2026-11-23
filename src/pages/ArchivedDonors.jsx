@@ -1,11 +1,17 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "../firebase/config";
-import { collection, getDocs, query, where, doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { LuArchive, LuRotateCcw, LuCheck } from "react-icons/lu";
 import DonorDetail from "../features/donors/DonorDetail";
+import { useAuth } from "../context/AuthContext";
+import { restoreDonorApplication } from "../services/firestore/donorService";
+import { donorApplicationStatus, isDonorLegacyArchived } from "../constants/statuses";
 
 const ArchivedDonors = () => {
+  const { currentUser } = useAuth();
   const [archivedDonors, setArchivedDonors] = useState([]);
+  const [actionError, setActionError] = useState("");
+  const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedDonor, setSelectedDonor] = useState(null);
   const [banner, setBanner] = useState({ show: false, message: "" });
@@ -17,28 +23,31 @@ const ArchivedDonors = () => {
     donorName: "",
   });
 
-  const fetchArchivedDonors = async () => {
-    try {
-      setLoading(true);
-      // Query both field possibilities ('status' or 'donorStatus') to ensure complete data sync
-      const q1 = query(collection(db, "donors"), where("status", "==", "archived"));
-      const q2 = query(collection(db, "donors"), where("donorStatus", "==", "archived"));
-
-      const [snapshot1, snapshot2] = await Promise.all([getDocs(q1), getDocs(q2)]);
-      
-      const map = new Map();
-      snapshot1.docs.forEach((docItem) => map.set(docItem.id, { id: docItem.id, ...docItem.data() }));
-      snapshot2.docs.forEach((docItem) => map.set(docItem.id, { id: docItem.id, ...docItem.data() }));
-
-      setArchivedDonors(Array.from(map.values()));
-    } catch (error) {
-      console.error("Error fetching archived donors:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Current archives use the admin-only flag; older admin builds overwrote
+  // the status fields with "archived" (any of the three).
   useEffect(() => {
+    async function fetchArchivedDonors() {
+      try {
+        const donors = collection(db, "donors");
+        const snapshots = await Promise.all([
+          getDocs(query(donors, where("archived", "==", true))),
+          getDocs(query(donors, where("applicationStatus", "==", "archived"))),
+          getDocs(query(donors, where("donorStatus", "==", "archived"))),
+          getDocs(query(donors, where("status", "==", "archived"))),
+        ]);
+        const map = new Map();
+        snapshots.forEach((snap) =>
+          snap.docs.forEach((docItem) => map.set(docItem.id, { id: docItem.id, ...docItem.data() }))
+        );
+        setArchivedDonors(Array.from(map.values()));
+      } catch (error) {
+        console.error("Error fetching archived donors:", error);
+        setActionError("Could not load archived donors. Refresh to try again.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
     fetchArchivedDonors();
   }, []);
 
@@ -46,21 +55,28 @@ const ArchivedDonors = () => {
     const { donorId, donorName } = confirmModal;
     if (!donorId) return;
 
+    setBusy(true);
+    setActionError("");
     try {
-      const donorRef = doc(db, "donors", donorId);
-      await updateDoc(donorRef, {
-        status: "pending",
-        donorStatus: "pending", // Update both to ensure compatibility
-        updatedAt: serverTimestamp(),
-      });
+      // Clears the archive flag; legacy archives get their status fields back.
+      const result = await restoreDonorApplication(donorId, currentUser);
+      if (!result.success) throw new Error(result.error);
 
       setArchivedDonors((prev) => prev.filter((donor) => donor.id !== donorId));
-      setBanner({ show: true, message: `Successfully restored application for ${donorName}!` });
+      setBanner({
+        show: true,
+        message: result.restoredStatus
+          ? `Restored the application for ${donorName} as ${result.restoredStatus}.`
+          : `Restored the application for ${donorName}.`,
+      });
       setTimeout(() => setBanner({ show: false, message: "" }), 4000);
       setConfirmModal({ isOpen: false, donorId: null, donorName: "" });
     } catch (error) {
       console.error("Error restoring donor:", error);
-      alert(`Failed to restore donor: ${error.message}`);
+      setActionError(error.message || "Could not restore the application.");
+      setConfirmModal({ isOpen: false, donorId: null, donorName: "" });
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -78,6 +94,12 @@ const ArchivedDonors = () => {
         <div className="flex items-center gap-2.5 p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl text-xs font-semibold shadow-xs transition-all">
           <LuCheck size={18} className="text-emerald-600 shrink-0" />
           <span>{banner.message}</span>
+        </div>
+      )}
+
+      {actionError && (
+        <div role="alert" className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-semibold">
+          {actionError}
         </div>
       )}
 
@@ -131,7 +153,7 @@ const ArchivedDonors = () => {
                       <td className="p-4 font-medium text-gray-700">{donor.chapter || "N/A"}</td>
                       <td className="p-4">
                         <span className="px-2.5 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase rounded-full">
-                          Archived
+                          {isDonorLegacyArchived(donor) ? "Archived (legacy)" : donorApplicationStatus(donor)}
                         </span>
                       </td>
                       <td className="p-4 pr-6 text-right" onClick={(e) => e.stopPropagation()}>
@@ -175,6 +197,7 @@ const ArchivedDonors = () => {
               </button>
               <button
                 onClick={handleRestoreConfirm}
+                disabled={busy}
                 className="flex-1 px-4 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-xs"
               >
                 Yes, Restore

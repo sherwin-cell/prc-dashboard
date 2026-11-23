@@ -1,5 +1,5 @@
 
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Archive,
@@ -9,20 +9,17 @@ import {
   Trash2,
 } from "lucide-react";
 import {
-  deleteDoc,
-  doc,
-  serverTimestamp,
-  updateDoc,
-} from "firebase/firestore";
-
-import {
   subscribeToPendingDonors,
   updateDonorStatus,
   scheduleDonorAppointment,
+  archiveDonorApplication,
+  deleteDonorApplication,
 } from "../../services/firestore/donorService";
+import { canArchiveDonor, isDonorArchived } from "../../constants/statuses";
+
+const REJECT_FIRST = "Only rejected applications can be archived or deleted.";
 
 import { useAuth } from "../../context/AuthContext";
-import { db } from "../../firebase/config";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 import DonorDetail from "./DonorDetail";
 
@@ -137,27 +134,12 @@ export default function PendingDonorsPage() {
     return unsubscribe;
   }, []);
 
-  // Synchronize the selected donor with Firestore updates.
-  useEffect(() => {
-    if (!selectedDonor) return;
-
-    const latest = donors.find(
-      (item) => item.id === selectedDonor.id
-    );
-
-    if (latest) {
-      setSelectedDonor((previous) => {
-        if (!previous || previous.id !== latest.id) {
-          return previous;
-        }
-
-        return {
-          ...previous,
-          ...latest,
-        };
-      });
-    }
-  }, [donors, selectedDonor?.id]);
+  // The selected donor with the latest Firestore data merged in.
+  const liveSelectedDonor = useMemo(() => {
+    if (!selectedDonor) return null;
+    const latest = donors.find((item) => item.id === selectedDonor.id);
+    return latest ? { ...selectedDonor, ...latest } : selectedDonor;
+  }, [donors, selectedDonor]);
 
   // Approve or reject a donor application.
   const handleStatusUpdate = async (
@@ -271,7 +253,7 @@ export default function PendingDonorsPage() {
     return donors.filter((donor) => {
       const status = statusOf(donor);
 
-      if (status === "archived") return false;
+      if (isDonorArchived(donor)) return false;
 
       if (selectedStatus && status !== selectedStatus) {
         return false;
@@ -328,34 +310,17 @@ export default function PendingDonorsPage() {
     const actionType = confirmAction.type;
 
     try {
-      if (actionType === "archive") {
-        await updateDoc(doc(db, "donors", donorId), {
-          applicationStatus: "archived",
-          donorStatus: "archived",
-          archivedAt: serverTimestamp(),
-          archivedBy: currentUser.uid,
-          updatedAt: serverTimestamp(),
-        });
+      const result =
+        actionType === "archive"
+          ? await archiveDonorApplication(donorId, currentUser)
+          : await deleteDonorApplication(donorId, currentUser);
+      if (!result.success) throw new Error(result.error);
 
-        setDonors((previous) =>
-          previous.map((item) =>
-            item.id === donorId
-              ? {
-                  ...item,
-                  applicationStatus: "archived",
-                  donorStatus: "archived",
-                  status: "archived",
-                }
-              : item
-          )
-        );
-      } else if (actionType === "delete") {
-        await deleteDoc(doc(db, "donors", donorId));
-
-        setDonors((previous) =>
-          previous.filter((item) => item.id !== donorId)
-        );
-      }
+      // Archived and deleted applications both leave the list; the
+      // live subscription confirms it.
+      setDonors((previous) =>
+        previous.filter((item) => item.id !== donorId)
+      );
 
       if (selectedDonor?.id === donorId) {
         setSelectedDonor(null);
@@ -382,10 +347,10 @@ export default function PendingDonorsPage() {
   }
 
   // Donor details and appointment scheduling.
-  if (selectedDonor) {
+  if (liveSelectedDonor) {
     return (
       <DonorDetail
-        donor={selectedDonor}
+        donor={liveSelectedDonor}
         onBack={() => setSelectedDonor(null)}
         onUpdateStatus={handleStatusUpdate}
         onScheduleAppointment={handleScheduleAppointment}
@@ -591,7 +556,8 @@ export default function PendingDonorsPage() {
 
                           <button
                             type="button"
-                            title="Archive application"
+                            title={canArchiveDonor(donor) ? "Archive application" : REJECT_FIRST}
+                            disabled={!canArchiveDonor(donor)}
                             aria-label={`Archive ${donorName(donor)}`}
                             onClick={() =>
                               setConfirmAction({
@@ -599,14 +565,15 @@ export default function PendingDonorsPage() {
                                 donor,
                               })
                             }
-                            className="rounded-lg p-2 hover:bg-amber-50 hover:text-amber-600"
+                            className="rounded-lg p-2 hover:bg-amber-50 hover:text-amber-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-current"
                           >
                             <Archive size={17} />
                           </button>
 
                           <button
                             type="button"
-                            title="Delete permanently"
+                            title={canArchiveDonor(donor) ? "Delete permanently" : REJECT_FIRST}
+                            disabled={!canArchiveDonor(donor)}
                             aria-label={`Delete ${donorName(donor)}`}
                             onClick={() =>
                               setConfirmAction({
@@ -614,7 +581,7 @@ export default function PendingDonorsPage() {
                                 donor,
                               })
                             }
-                            className="rounded-lg p-2 hover:bg-rose-50 hover:text-rose-600"
+                            className="rounded-lg p-2 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-current"
                           >
                             <Trash2 size={17} />
                           </button>
@@ -650,10 +617,15 @@ export default function PendingDonorsPage() {
               ?
             </p>
 
-            {confirmAction.type === "delete" && (
+            {confirmAction.type === "delete" ? (
               <p className="text-sm font-semibold text-red-600">
-                This permanently deletes the donor
-                document and cannot be undone.
+                This permanently deletes the application and its history and
+                cannot be undone. The user can apply again from the app.
+              </p>
+            ) : (
+              <p className="text-sm text-gray-500">
+                The donor keeps seeing the rejection in the app. You can restore
+                it from Archived Donors.
               </p>
             )}
 

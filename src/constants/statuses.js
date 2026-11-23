@@ -220,3 +220,27 @@ export const faceAttemptLabel = (outcome) =>
     matcher_unavailable: "Matcher unavailable",
     upload_failed: "Selfie upload failed",
   })[norm(outcome)] || outcome || "Unknown";
+
+// donors/{uid} application status: applicationStatus, then donorStatus,
+// then status (the same precedence as the backend). The app knows pending /
+// approved / rejected only (DonorStatus in statuses.dart).
+export const donorApplicationStatus = (donor) =>
+  norm(donor?.applicationStatus || donor?.donorStatus || donor?.status || "pending");
+
+/**
+ * Archived donor applications are hidden from PRC's lists. Current archives
+ * use the admin-only `archived: true` flag and keep the real status; older
+ * admin builds overwrote the status fields with "archived" (legacy).
+ */
+export const isDonorLegacyArchived = (donor) =>
+  [donor?.applicationStatus, donor?.donorStatus, donor?.status].some((v) => norm(v) === "archived");
+
+export const isDonorArchived = (donor) => donor?.archived === true || isDonorLegacyArchived(donor);
+
+/**
+ * Only rejected applications may be archived or deleted: the donor already
+ * sees the decision (and PRC's reason) in the app. Pending applications must
+ * be reviewed first, and approved donors are managed through availability.
+ */
+export const canArchiveDonor = (donor) =>
+  donor?.donorActivationStatus !== "active" && donorApplicationStatus(donor) === "rejected";

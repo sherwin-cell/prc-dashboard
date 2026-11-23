@@ -4,16 +4,22 @@ import {
   onSnapshot,
   doc,
   getDoc,
+  getDocs,
   query,
   where,
   writeBatch,
   serverTimestamp,
   updateDoc,
+  deleteField,
   runTransaction,
 } from "firebase/firestore";
 
 import { db } from "../../firebase/config";
 import { logAdminAction } from "../auditService";
+import {
+  canArchiveDonor,
+  isDonorLegacyArchived,
+} from "../../constants/statuses";
 
 // =====================================================
 // HELPERS
@@ -458,9 +464,9 @@ export async function updateDonorStatus(
     const donor = donorSnap.data();
     const current = applicationStatusOf(donor);
 
-    if (current === "archived") {
+    if (current === "archived" || donor.archived === true) {
       throw new Error(
-        "Archived applications cannot be reviewed."
+        "Archived applications cannot be reviewed. Restore it first."
       );
     }
 
@@ -1480,5 +1486,150 @@ export async function updateDonorAvailability(
         error.message ||
         "Could not update donor availability.",
     };
+  }
+}
+
+// =====================================================
+// ARCHIVE / RESTORE / DELETE APPLICATIONS
+// =====================================================
+
+// Donor fields activation and donations copy onto users/{uid}.
+const USER_DONOR_FIELDS = [
+  "donorActivationStatus",
+  "donorActivatedAt",
+  "lastDonationDate",
+  "nextEligibleDonationDate",
+  "donationAvailabilityStatus",
+  "donationIntervalMonths",
+  "isAvailableForDonation",
+];
+
+/**
+ * Hide a rejected application from PRC's lists. Admin-only flag: the status
+ * stays "rejected", so the donor keeps seeing PRC's decision and reason in the
+ * app and can still reapply if PRC allowed it.
+ */
+export async function archiveDonorApplication(donorId, adminUser) {
+  try {
+    requireAdmin(adminUser);
+    const donorRef = doc(db, "donors", donorId);
+
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(donorRef);
+      if (!snap.exists()) throw new Error("Donor application not found.");
+      const donor = snap.data();
+      if (!canArchiveDonor(donor)) {
+        throw new Error(
+          "Only rejected applications can be archived. Review pending applications first; " +
+            "manage approved donors through availability."
+        );
+      }
+      tx.update(donorRef, {
+        archived: true,
+        archivedAt: serverTimestamp(),
+        archivedBy: adminUser.uid,
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    await logAdminAction(adminUser, "ARCHIVE_DONOR_APPLICATION", donorId, "Rejected application archived");
+    return { success: true };
+  } catch (error) {
+    console.error("Could not archive donor application:", error);
+    return { success: false, error: error.message || "Could not archive the application." };
+  }
+}
+
+/**
+ * Bring an archived application back. Current archives only clear the flag.
+ * Legacy archives overwrote applicationStatus / donorStatus / status with
+ * "archived"; all three are reset together (approved for an activated donor,
+ * otherwise pending for PRC to review again).
+ */
+export async function restoreDonorApplication(donorId, adminUser) {
+  try {
+    requireAdmin(adminUser);
+    const donorRef = doc(db, "donors", donorId);
+    let restoredStatus = null;
+
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(donorRef);
+      if (!snap.exists()) throw new Error("Donor application not found.");
+      const donor = snap.data();
+
+      const update = {
+        archived: false,
+        restoredAt: serverTimestamp(),
+        restoredBy: adminUser.uid,
+        updatedAt: serverTimestamp(),
+      };
+      if (isDonorLegacyArchived(donor)) {
+        restoredStatus = donor.donorActivationStatus === "active" ? "approved" : "pending";
+        Object.assign(update, {
+          applicationStatus: restoredStatus,
+          donorStatus: restoredStatus,
+          status: restoredStatus,
+        });
+      }
+      tx.update(donorRef, update);
+    });
+
+    await logAdminAction(
+      adminUser,
+      "RESTORE_DONOR_APPLICATION",
+      donorId,
+      restoredStatus ? `Legacy archived application restored as ${restoredStatus}` : "Application restored from archive"
+    );
+    return { success: true, restoredStatus };
+  } catch (error) {
+    console.error("Could not restore donor application:", error);
+    return { success: false, error: error.message || "Could not restore the application." };
+  }
+}
+
+/**
+ * Permanently delete a rejected (or legacy archived) application with its
+ * application history, and clear the donor fields copied to users/{uid}.
+ * The user can then apply again from the app. Their past offers stay as
+ * request records.
+ */
+export async function deleteDonorApplication(donorId, adminUser) {
+  try {
+    requireAdmin(adminUser);
+    const donorRef = doc(db, "donors", donorId);
+    const donorSnap = await getDoc(donorRef);
+    if (!donorSnap.exists()) return { success: true };
+    const donor = donorSnap.data();
+
+    if (!canArchiveDonor(donor) && !(isDonorLegacyArchived(donor) && donor.donorActivationStatus !== "active")) {
+      throw new Error("Only rejected applications can be deleted.");
+    }
+
+    const history = await getDocs(collection(db, "donors", donorId, "application_history"));
+    const userRef = doc(db, "users", donor.userId || donorId);
+    const userSnap = await getDoc(userRef);
+
+    const batch = writeBatch(db);
+    history.docs.forEach((item) => batch.delete(item.ref));
+    batch.delete(donorRef);
+    if (userSnap.exists()) {
+      batch.update(userRef, {
+        isDonor: false,
+        ...Object.fromEntries(USER_DONOR_FIELDS.map((field) => [field, deleteField()])),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+
+    await logAdminAction(
+      adminUser,
+      "DELETE_DONOR_APPLICATION",
+      donorId,
+      `Donor application deleted with ${history.size} history record(s)`
+    );
+    return { success: true };
+  } catch (error) {
+    console.error("Could not delete donor application:", error);
+    return { success: false, error: error.message || "Could not delete the application." };
   }
 }
