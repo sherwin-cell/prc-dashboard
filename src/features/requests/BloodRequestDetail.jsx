@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
-import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan } from "react-icons/lu";
+import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan, LuBellRing } from "react-icons/lu";
 import { useAuth } from "../../context/AuthContext";
 import RequestOffersList from "../../components/admin/RequestOffersList";
 import {
@@ -13,6 +13,7 @@ import {
   isRequestOpen,
   requestStatusClasses,
   requestStatusLabel,
+  unitsNeededOf,
 } from "../../constants/statuses";
 
 const CONFIRM_COPY = {
@@ -392,10 +393,37 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
           )}
         </div>
 
+        {/* Donors alerted on approval: written by blood_connect_backend
+            (notification worker) as matchingDonorsNotified; only a count. */}
+        {reqData.status && reqData.status !== RequestStatus.pending && reqData.status !== RequestStatus.rejected && (
+          <div className="flex items-start gap-2.5 p-3.5 rounded-xl border border-blue-100 bg-blue-50/60 text-xs">
+            <LuBellRing size={16} className="text-blue-600 shrink-0 mt-0.5" />
+            {typeof reqData.matchingDonorsNotified === "number" ? (
+              reqData.matchingDonorsNotified > 0 ? (
+                <p className="text-blue-900">
+                  <span className="font-black tabular-nums">{reqData.matchingDonorsNotified}</span>{" "}
+                  matching donor{reqData.matchingDonorsNotified === 1 ? "" : "s"} alerted when this request was approved.
+                </p>
+              ) : (
+                <p className="text-blue-900">
+                  <span className="font-bold">No matching donors were alerted.</span> Either the requester has no
+                  municipality or province on their profile, or no available {reqData.bloodType || ""} donors live nearby.
+                  The request is still listed for donors in the app.
+                </p>
+              )
+            ) : (
+              <p className="text-blue-900">
+                Donor alerts not recorded yet. The backend notification worker records the count shortly after
+                approval; if this stays empty, check that the backend is running.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Donor offers (only once PRC has reviewed the request) */}
         {reqData.status && reqData.status !== RequestStatus.pending && reqData.status !== RequestStatus.rejected && (
           <div className="border-t border-gray-100 pt-4">
-            <RequestOffersList requestId={reqData.id} requestStatus={reqData.status} />
+            <RequestOffersList requestId={reqData.id} requestStatus={reqData.status} unitsNeeded={unitsNeededOf(reqData)} />
           </div>
         )}
       </div>
@@ -411,6 +439,12 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
               Are you sure you want to <span className="font-semibold">{CONFIRM_COPY[confirmModal.actionType]?.verb}</span> the blood request for{" "}
               <span className="font-semibold text-gray-900">{reqData.patientName}</span>?
             </p>
+            {confirmModal.actionType === "fulfill" && (
+              <p className="text-xs text-gray-500">
+                Offers still waiting for PRC are declined automatically and those donors are told they were not
+                needed. Confirmed donors stay, so you can still record their donations.
+              </p>
+            )}
             <div className="flex gap-3 pt-4">
               <button
                 onClick={() => setConfirmModal({ isOpen: false, actionType: null })}

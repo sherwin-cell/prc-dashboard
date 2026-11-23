@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import {
+  reconcileMatchedStatus,
   subscribeToRequestOffers,
   updateOfferStatus,
 } from "../../services/firestore/requestService";
 import {
   OfferStatus,
   RequestStatus,
+  countsTowardMatch,
   isOfferConfirmed,
   isOfferPending,
   isRequestOpen,
@@ -19,13 +21,14 @@ const rank = (status) =>
   isOfferPending(status) ? 0 : isOfferConfirmed(status) ? 1 : status === OfferStatus.donated ? 2 : 3;
 const millis = (ts) => (ts?.toMillis ? ts.toMillis() : 0);
 
-const RequestOffersList = ({ requestId, requestStatus }) => {
+const RequestOffersList = ({ requestId, requestStatus, unitsNeeded = 1 }) => {
   const { currentUser } = useAuth();
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [busyId, setBusyId] = useState("");
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     return subscribeToRequestOffers(
@@ -46,8 +49,24 @@ const RequestOffersList = ({ requestId, requestStatus }) => {
   const handleUpdateOfferStatus = async (offer, newStatus) => {
     setBusyId(offer.id);
     setActionError("");
+    setNotice("");
     const result = await updateOfferStatus(requestId, offer.id, newStatus, currentUser);
     if (!result.success) setActionError(result.error || "Could not update the offer.");
+    else if (result.match?.changed && result.match.status === RequestStatus.matched) {
+      setNotice("Confirmed donors now cover every unit needed. The request is marked Donor matched and no longer takes new offers.");
+    } else if (result.match && !result.match.success) {
+      setActionError(`Offer saved, but the request status could not be updated: ${result.match.error}`);
+    }
+    setBusyId("");
+  };
+
+  const handleReopen = async () => {
+    setBusyId("reopen");
+    setActionError("");
+    setNotice("");
+    const result = await reconcileMatchedStatus(requestId, currentUser);
+    if (!result.success) setActionError(result.error || "Could not reopen the request.");
+    else if (result.changed) setNotice("The request is open to donors again and accepts new offers.");
     setBusyId("");
   };
 
@@ -65,12 +84,41 @@ const RequestOffersList = ({ requestId, requestStatus }) => {
     (a, b) => rank(a.status) - rank(b.status) || millis(b.createdAt) - millis(a.createdAt)
   );
   const activeCount = offers.filter((o) => isOfferPending(o.status) || isOfferConfirmed(o.status)).length;
+  const covered = offers.filter((o) => countsTowardMatch(o.status)).length;
+  // A confirmed donor withdrew after the request was matched.
+  const matchedButShort = requestStatus === RequestStatus.matched && covered < unitsNeeded;
 
   return (
     <div className="space-y-3">
       <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700">
         Donor Offers ({activeCount} active / {offers.length} total)
       </h4>
+
+      <p className="text-xs text-gray-600">
+        Confirmed donors cover <span className="font-bold text-gray-900 tabular-nums">{Math.min(covered, unitsNeeded)}</span> of{" "}
+        <span className="font-bold text-gray-900 tabular-nums">{unitsNeeded}</span> unit{unitsNeeded === 1 ? "" : "s"} needed.
+        {requestOpen && requestStatus !== RequestStatus.matched && covered < unitsNeeded &&
+          " The request is marked Donor matched automatically once every unit is covered."}
+      </p>
+
+      {matchedButShort && (
+        <div role="alert" className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <span>A confirmed donor withdrew, so this matched request is short of donors and is hidden from donors in the app.</span>
+          <button
+            disabled={!!busyId}
+            onClick={handleReopen}
+            className="shrink-0 px-3 py-1 font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50"
+          >
+            {busyId === "reopen" ? "Reopening..." : "Reopen to donors"}
+          </button>
+        </div>
+      )}
+
+      {notice && (
+        <div role="status" className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+          {notice}
+        </div>
+      )}
 
       {actionError && (
         <div role="alert" className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-3">

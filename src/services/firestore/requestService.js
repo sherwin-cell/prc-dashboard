@@ -1,15 +1,10 @@
-import { 
-  collection, 
-  query, 
-  where, 
-  orderBy, 
-  onSnapshot, 
-  doc, 
+import {
+  collection,
+  onSnapshot,
+  doc,
   getDoc,
   getDocs,
-  setDoc,
   serverTimestamp,
-  updateDoc,
   runTransaction,
   writeBatch,
 } from 'firebase/firestore';
@@ -19,11 +14,13 @@ import {
   OfferStatus,
   RequestStatus,
   canArchiveRequest,
+  countsTowardMatch,
   isOfferConfirmed,
   isOfferPending,
   isRequestOpen,
   offerStatusLabel,
   requestStatusLabel,
+  unitsNeededOf,
 } from '../../constants/statuses';
 import { postDonationAvailability, todayPhilippines } from './donorService';
 
@@ -53,16 +50,28 @@ export function subscribeToRequestOffers(requestId, callback, onError) {
 
 /**
  * PRC marks an approved request as fulfilled (blood was received).
- * Closes the donor-facing summary in the same transaction.
+ *
+ * In the same transaction: closes the donor-facing summary and declines every
+ * offer still waiting for PRC (rejectionReason "request_fulfilled"). The
+ * backend tells those donors "Offer not selected"; confirmed offers are left
+ * so PRC can still record their donations.
  */
 export async function markRequestFulfilled(requestId, adminUser) {
   try {
     const requestRef = doc(db, 'blood_requests', requestId);
     const summaryRef = doc(db, 'request_summaries', requestId);
+    // Transactions cannot run queries: find pending offers first, then
+    // re-read each one inside the transaction.
+    const pendingRefs = (await getDocs(collection(db, 'blood_requests', requestId, 'offers'))).docs
+      .filter((offer) => isOfferPending(offer.data().status))
+      .map((offer) => offer.ref);
+    let declined = 0;
 
     await runTransaction(db, async (tx) => {
       const requestSnap = await tx.get(requestRef);
       const summarySnap = await tx.get(summaryRef);
+      const pendingSnaps = [];
+      for (const ref of pendingRefs) pendingSnaps.push(await tx.get(ref));
 
       if (!requestSnap.exists()) throw new Error('Blood request no longer exists.');
       const status = requestSnap.data().status;
@@ -82,16 +91,30 @@ export async function markRequestFulfilled(requestId, adminUser) {
       if (summarySnap.exists()) {
         tx.update(summaryRef, { status: RequestStatus.fulfilled, updatedAt: serverTimestamp() });
       }
+
+      declined = 0;
+      for (const snap of pendingSnaps) {
+        // Skip offers withdrawn or handled since they were listed.
+        if (!snap.exists() || !isOfferPending(snap.data().status)) continue;
+        tx.update(snap.ref, {
+          status: OfferStatus.rejected,
+          rejectedAt: serverTimestamp(),
+          rejectedBy: adminUser?.uid || 'admin',
+          rejectionReason: 'request_fulfilled',
+          updatedAt: serverTimestamp(),
+        });
+        declined += 1;
+      }
     });
 
     await logAdminAction(
       adminUser,
       'UPDATE_REQUEST_STATUS_FULFILLED',
       requestId,
-      'Blood request marked fulfilled'
+      `Blood request marked fulfilled; ${declined} pending offer(s) declined`
     );
 
-    return { success: true };
+    return { success: true, declined };
   } catch (error) {
     console.error('Error marking request fulfilled:', error);
     return { success: false, error: error.message };
@@ -184,80 +207,19 @@ export async function updateOfferStatus(requestId, offerId, newStatus, adminUser
       `Offer ${offerId} changed to ${newStatus}`
     );
 
-    return { success: true };
+    // A newly confirmed donor may complete the request.
+    let match = null;
+    if (newStatus === OfferStatus.approved) {
+      match = await reconcileMatchedStatus(requestId, adminUser);
+    }
+
+    return { success: true, match };
   } catch (error) {
     console.error('Error updating offer status:', error);
     return { success: false, error: error.message };
   }
 }
 
-/**
- * Subscribe to real-time pending blood requests
- */
-export function subscribeToPendingRequests(callback, onError) {
-  const q = query(
-    collection(db, 'blood_requests'),
-    where('status', '==', 'pending'),
-    orderBy('createdAt', 'desc')
-  );
-
-  return onSnapshot(q, (snapshot) => {
-    const requests = snapshot.docs.map(docSnap => ({
-      id: docSnap.id,
-      ...docSnap.data()
-    }));
-    callback(requests);
-  }, onError);
-}
-
-/**
- * Approve or Reject a blood request status
- */
-export async function updateRequestStatus(requestId, newStatus, adminUser) {
-  try {
-    const requestRef = doc(db, 'blood_requests', requestId);
-    
-    await updateDoc(requestRef, {
-      status: newStatus, // 'active' or 'rejected'
-      reviewedAt: new Date(),
-      reviewedBy: adminUser?.uid || 'admin',
-    });
-
-    // Keep the anonymized donor-facing summary in sync with the request.
-    const summaryRef = doc(db, 'request_summaries', requestId);
-    if (newStatus === 'active') {
-      const requestData = (await getDoc(requestRef)).data() || {};
-      await setDoc(summaryRef, {
-        requestId,
-        bloodType: requestData.bloodType ?? null,
-        component: requestData.component ?? null,
-        unitsRequired: requestData.unitsRequired ?? null,
-        urgency: requestData.urgency ?? null,
-        hospitalName: requestData.hospitalName ?? null,
-        neededByDate:
-          requestData.neededByDate ?? requestData.neededBy ?? requestData.requiredDate ?? null,
-        status: 'active',
-        createdAt: requestData.createdAt ?? serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    } else if ((await getDoc(summaryRef)).exists()) {
-      await updateDoc(summaryRef, { status: newStatus, updatedAt: serverTimestamp() });
-    }
-
-    // Log the admin action using your audit service
-    await logAdminAction(
-      adminUser, 
-      `UPDATE_REQUEST_STATUS_${newStatus.toUpperCase()}`, 
-      requestId, 
-      `Blood request status changed to ${newStatus}`
-    );
-
-    return { success: true };
-  } catch (error) {
-    console.error("Error updating request status:", error);
-    return { success: false, error: error.message };
-  }
-}
 /**
  * Hide a finished request from the active list.
  *
@@ -387,6 +349,67 @@ export async function deleteRequest(requestId, adminUser) {
     return { success: true };
   } catch (error) {
     console.error('Error deleting request:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Keep blood_requests and request_summaries "matched" in step with the offers.
+ *
+ * - approved/active and confirmed donors cover the units needed -> matched.
+ *   The app then hides it from donors (openToDonors is approved/active) and
+ *   firestore.rules stop new offers.
+ * - matched but a confirmed donor withdrew -> active again (what approval
+ *   writes), so the request is shown to donors and accepts offers.
+ *
+ * Each confirmed or donated offer covers one unit. Safe to call repeatedly.
+ * Resolves to { success, status, changed }.
+ */
+export async function reconcileMatchedStatus(requestId, adminUser) {
+  try {
+    const requestRef = doc(db, 'blood_requests', requestId);
+    const summaryRef = doc(db, 'request_summaries', requestId);
+    const offers = await getDocs(collection(db, 'blood_requests', requestId, 'offers'));
+    const covered = offers.docs.filter((o) => countsTowardMatch(o.data().status)).length;
+
+    let result = { status: null, changed: false };
+    await runTransaction(db, async (tx) => {
+      const requestSnap = await tx.get(requestRef);
+      const summarySnap = await tx.get(summaryRef);
+      if (!requestSnap.exists()) throw new Error('Blood request no longer exists.');
+
+      const request = requestSnap.data();
+      const status = String(request.status || '').trim().toLowerCase();
+      const needed = unitsNeededOf(request);
+      let next = null;
+      if ((status === RequestStatus.approved || status === RequestStatus.active) && covered >= needed) {
+        next = RequestStatus.matched;
+      } else if (status === RequestStatus.matched && covered < needed) {
+        next = RequestStatus.active;
+      }
+      result = { status: next || status, changed: Boolean(next) };
+      if (!next) return;
+
+      const stamp = next === RequestStatus.matched ? 'matchedAt' : 'reopenedAt';
+      tx.update(requestRef, { status: next, [stamp]: serverTimestamp(), updatedAt: serverTimestamp() });
+      if (summarySnap.exists()) {
+        tx.update(summaryRef, { status: next, updatedAt: serverTimestamp() });
+      }
+    });
+
+    if (result.changed) {
+      await logAdminAction(
+        adminUser,
+        `UPDATE_REQUEST_STATUS_${result.status.toUpperCase()}`,
+        requestId,
+        result.status === RequestStatus.matched
+          ? `Confirmed donors cover the units needed (${covered})`
+          : `Reopened to donors: confirmed donors (${covered}) no longer cover the units needed`
+      );
+    }
+    return { success: true, ...result, covered };
+  } catch (error) {
+    console.error('Error updating matched status:', error);
     return { success: false, error: error.message };
   }
 }

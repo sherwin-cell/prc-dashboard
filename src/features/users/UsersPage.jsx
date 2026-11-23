@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { LuArrowLeft, LuSearch, LuRefreshCw } from "react-icons/lu";
+import { LuArrowLeft, LuSearch, LuRefreshCw, LuTrash2, LuCheck } from "react-icons/lu";
 import {
   getUsers,
   getUserIdSubmission,
   getFaceVerificationAttempts,
   reviewFaceVerification,
+  deleteUserAccount,
 } from "../../services/firestore/userService";
 import { useAuth } from "../../context/AuthContext";
 import {
@@ -215,6 +216,71 @@ function FaceReview({ user, idSubmission, onReviewed }) {
   );
 }
 
+function DeleteAccount({ user, onDeleted }) {
+  const { currentUser } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  // PRC types the email (or DELETE when there is none) to confirm.
+  const expected = user.email || "DELETE";
+  const name = user.fullName || user.name || user.email || "this user";
+
+  const close = () => { if (!busy) { setOpen(false); setTyped(""); setError(""); } };
+
+  const confirm = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await deleteUserAccount(user.uid, currentUser);
+      onDeleted(user, result);
+    } catch (err) {
+      setError(err.message || "Could not delete the account.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="bg-white border border-rose-200 rounded-2xl p-5 space-y-3">
+      <h2 className="font-bold text-lg text-rose-800">Delete Account</h2>
+      <p className="text-sm text-gray-600">
+        Removes the account the same way as Delete Account in the mobile app: in-progress blood requests are
+        cancelled, active donor offers withdrawn, uploaded photos, personal records and chats deleted, and the
+        sign-in removed. Fulfilled and closed requests and donations stay as PRC records.
+      </p>
+      <button type="button" onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-2 rounded-lg border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">
+        <LuTrash2 /> Delete account
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
+            <h3 className="text-lg font-bold text-gray-900">Delete {name}'s account?</h3>
+            <p className="text-sm text-gray-600">This cannot be undone. The user will need to register again to use Blood-Connect.</p>
+            <label className="block text-sm text-gray-700">
+              Type <span className="font-mono font-semibold">{expected}</span> to confirm
+              <input value={typed} onChange={(e) => setTyped(e.target.value)} disabled={busy} autoFocus
+                className="mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-rose-500" />
+            </label>
+            {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
+            <div className="flex gap-3">
+              <button type="button" onClick={close} disabled={busy}
+                className="flex-1 px-4 py-2.5 text-sm font-semibold text-gray-700 border border-gray-300 hover:bg-gray-50 rounded-xl disabled:opacity-50">
+                Cancel
+              </button>
+              <button type="button" onClick={confirm} disabled={busy || typed.trim() !== expected}
+                className="flex-1 px-4 py-2.5 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl disabled:opacity-50">
+                {busy ? "Deleting..." : "Delete account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -225,6 +291,7 @@ export default function UsersPage() {
   const [detailError, setDetailError] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [notice, setNotice] = useState("");
 
   const loadUsers = async () => {
     setLoading(true);
@@ -291,6 +358,17 @@ export default function UsersPage() {
     if (updated) setSelectedUser(updated);
   };
 
+  const handleDeleted = (user, result) => {
+    setUsers((prev) => prev.filter((u) => u.uid !== user.uid));
+    setSelectedUser(null);
+    setIdSubmission(null);
+    const s = result?.summary || {};
+    setNotice(
+      `Deleted ${user.fullName || user.name || user.email || "the account"}. ` +
+      `${s.requestsCancelled || 0} request(s) cancelled, ${s.offersWithdrawn || 0} offer(s) withdrawn.`
+    );
+  };
+
   if (selectedUser) {
     const user = selectedUser;
     const address = [user.purok, user.barangay, user.municipality, user.province].filter(Boolean).join(", ");
@@ -332,6 +410,7 @@ export default function UsersPage() {
             <Info label="Last Updated" value={formatDate(user.updatedAt)} />
           </div>
         </section>
+        <DeleteAccount key={`delete-${user.uid}`} user={user} onDeleted={handleDeleted} />
       </div>
     );
   }
@@ -342,6 +421,12 @@ export default function UsersPage() {
         <div><h1 className="text-2xl font-bold text-gray-900">Registered Users</h1><p className="text-sm text-gray-500">Manage accounts and review identity verification</p></div>
         <button type="button" onClick={loadUsers} disabled={loading} className="inline-flex items-center gap-2 border rounded-lg px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"><LuRefreshCw /> Refresh</button>
       </div>
+      {notice && (
+        <div role="status" className="flex items-center justify-between gap-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-900">
+          <span className="flex items-center gap-2"><LuCheck /> {notice}</span>
+          <button type="button" onClick={() => setNotice("")} className="text-emerald-700 font-semibold">Dismiss</button>
+        </div>
+      )}
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter by verification">
         {FILTERS.map(({ key, label }) => (
           <button key={key} type="button" role="tab" aria-selected={filter === key} onClick={() => setFilter(key)}

@@ -118,6 +118,17 @@ export const isOfferConfirmed = (status) =>
 
 export const isOfferPending = (status) => norm(status || OfferStatus.pending) === OfferStatus.pending;
 
+/**
+ * Offers that cover a unit of the request: PRC confirmed (approved / legacy
+ * accepted) or already donated. Same as OfferStatus.isConfirmed in the app.
+ */
+export const countsTowardMatch = (status) =>
+  isOfferConfirmed(status) || norm(status) === OfferStatus.donated;
+
+/** Units the request needs; each confirmed donor covers one unit. */
+export const unitsNeededOf = (request) =>
+  Math.max(1, Number(request?.unitsRequired ?? request?.unitsNeeded ?? 1) || 1);
+
 export const offerStatusLabel = (status) => {
   switch (norm(status)) {
     case "":

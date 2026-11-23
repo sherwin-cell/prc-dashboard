@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 
 import { logAdminAction } from "../auditService";
+import { apiRequest } from "../apiClient";
 import { FaceVerificationResult } from "../../constants/statuses";
 
 /**
@@ -215,14 +216,22 @@ export const getUserBloodRequests = async (userId) => {
 };
 
 /**
- * Old identity approval workflow is discontinued.
- *
- * Keep this export temporarily to prevent import errors.
- * Remove callers after migrating the admin UI.
+ * Delete a user's account through blood_connect_backend
+ * (DELETE /api/admin/users/{uid}), the same cleanup as the app's Delete
+ * Account: in-progress requests are cancelled, active offers withdrawn,
+ * uploaded images, personal documents and chats deleted, and the Firebase
+ * Auth user removed. Closed requests and offers stay as PRC records.
  */
-export const updateUserVerificationStatus = async () => {
-  throw new Error(
-    "Account identity approval is discontinued. " +
-    "Review donor applications and blood requests separately."
-  );
+export const deleteUserAccount = async (userId, adminUser) => {
+  const result = await apiRequest(`/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  });
+  // The backend records account_deletions/{uid}; this keeps PRC's own audit trail.
+  try {
+    await logAdminAction(adminUser, "DELETE_USER_ACCOUNT", userId,
+      `Account deleted: ${JSON.stringify(result.summary || {})}`);
+  } catch (error) {
+    console.error("Account deleted, but the audit entry failed:", error);
+  }
+  return result;
 };
