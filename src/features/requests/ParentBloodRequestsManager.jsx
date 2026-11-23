@@ -18,7 +18,7 @@ import {
   urgencyOf,
   userNameOf,
 } from "./requestQueue";
-import { useUserProfiles } from "./useUserProfiles";
+import { useUserProfiles } from "../../hooks/useDocsById";
 
 const TAB_IDS = QUEUE_TABS.map((t) => t.id);
 // URL parameter for each filter; the header search writes q.

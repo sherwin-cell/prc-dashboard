@@ -35,7 +35,7 @@ const DONOR_LINKS = [
   { to: "/donors", end: true, icon: LuUserCheck, label: "Donor Applications" },
   { to: "/donors/appointments", icon: LuCalendarClock, label: "Appointments" },
   { to: "/donors/screening", icon: LuClipboardCheck, label: "Screening & Collection" },
-  { to: "/donors/active", icon: LuHeartPulse, label: "Active Donors" },
+  { to: "/donors/active", icon: LuHeartPulse, label: "Donors" },
   { to: "/donors/archive", icon: LuArchive, label: "Archived Donors" },
 ];
 

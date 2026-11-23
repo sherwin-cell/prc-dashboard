@@ -45,7 +45,7 @@ import {
   userNameOf,
 } from "./requestQueue";
 import { requestTimeline } from "./requestTimeline";
-import { useUserProfiles } from "./useUserProfiles";
+import { useUserProfiles } from "../../hooks/useDocsById";
 
 const CONFIRM_COPY = {
   approve: { title: "Approve request", verb: "approve", button: "Yes, approve", color: "bg-emerald-600 hover:bg-emerald-700" },

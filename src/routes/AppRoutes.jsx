@@ -17,7 +17,7 @@ import ArchivedRequests from '../pages/ArchivedRequests';
 import PendingDonorsPage from '../features/donors/PendingDonorsPage';
 import DonorAppointmentsPage from '../features/donors/DonorAppointmentsPage';
 import DonorScreeningPage from '../features/donors/DonorScreeningPage';
-import ActiveDonorsPage from '../features/donors/ActiveDonorsPage';
+import DonorsPage from '../features/donors/DonorsPage';
 import ArchivedDonors from '../pages/ArchivedDonors';
 
 // Users
@@ -77,7 +77,7 @@ const AppRoutes = () => {
 
           <Route
             path="/donors/active"
-            element={<ActiveDonorsPage />}
+            element={<DonorsPage />}
           />
 
           <Route
