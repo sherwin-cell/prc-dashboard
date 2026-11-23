@@ -129,6 +129,35 @@ function addCalendarMonths(dateString, months) {
   return targetDate.toISOString().slice(0, 10);
 }
 
+// Whole-blood donation interval. Confirm this policy with PRC.
+export const DONATION_INTERVAL_MONTHS = 3;
+
+/**
+ * Donor fields to write after a donation on `donationDate` (YYYY-MM-DD).
+ *
+ * The donor goes on interval and stops being available, the same as after
+ * walk-in activation. The mobile app (DonorEligibility), the backend
+ * (is_donor_eligible) and firestore.rules (isEligibleDonor) read
+ * isAvailableForDonation and nextEligibleDonationDate. PRC marks the donor
+ * available again from Active Donors once the interval has passed.
+ */
+export function postDonationAvailability(donor, donationDate = todayPhilippines()) {
+  const donationIntervalMonths =
+    Number(donor?.donationIntervalMonths) > 0
+      ? Number(donor.donationIntervalMonths)
+      : DONATION_INTERVAL_MONTHS;
+
+  return {
+    lastDonationDate: donationDate,
+    nextEligibleDonationDate: addCalendarMonths(donationDate, donationIntervalMonths),
+    donationIntervalMonths,
+    donationAvailabilityStatus: "on_interval",
+    isAvailableForDonation: false,
+  };
+}
+
+export { todayPhilippines };
+
 function requireAdmin(adminUser) {
   if (!adminUser?.uid) {
     throw new Error(
@@ -193,9 +222,9 @@ async function enrichWithUserVerification(donor) {
           ? "submitted"
           : "incomplete",
 
-      faceVerified:
-        user.faceVerified === true ||
-        user.faceVerification?.faceMatchPassed === true,
+      // Only the backend or a PRC review sets faceVerified; faceMatchPassed
+      // was reported by old app builds and is not trusted.
+      faceVerified: user.faceVerified === true,
     };
   } catch (error) {
     console.error(
@@ -1038,9 +1067,7 @@ export async function activateDonor(
       );
     }
 
-    // Example whole-blood interval.
-    // Confirm this policy with PRC.
-    const donationIntervalMonths = 3;
+    const donationIntervalMonths = DONATION_INTERVAL_MONTHS;
 
     const nextEligibleDonationDate = addCalendarMonths(
       lastDonationDate,
@@ -1058,6 +1085,8 @@ export async function activateDonor(
       nextEligibleDonationDate,
       donationAvailabilityStatus,
       donationIntervalMonths,
+      // Read by the mobile app, backend matching and firestore.rules.
+      isAvailableForDonation: false,
     };
 
     const batch = writeBatch(db);
@@ -1241,6 +1270,7 @@ export async function updateDonorAvailability(
 
           transaction.update(donorRef, {
             donationAvailabilityStatus: "on_interval",
+            isAvailableForDonation: false,
 
             availabilityReview: {
               status: "on_interval",
@@ -1276,6 +1306,7 @@ export async function updateDonorAvailability(
 
           transaction.update(donorRef, {
             donationAvailabilityStatus: "medical_hold",
+            isAvailableForDonation: false,
 
             availabilityReview: {
               status: "medical_hold",
@@ -1361,6 +1392,7 @@ export async function updateDonorAvailability(
 
           transaction.update(donorRef, {
             donationAvailabilityStatus: "available",
+            isAvailableForDonation: true,
 
             availabilityReview: {
               status: "available",

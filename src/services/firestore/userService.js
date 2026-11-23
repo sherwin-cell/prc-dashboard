@@ -9,8 +9,86 @@ import {
   getDoc,
   getDocs,
   query,
+  runTransaction,
+  serverTimestamp,
   where,
 } from "firebase/firestore";
+
+import { logAdminAction } from "../auditService";
+import { FaceVerificationResult } from "../../constants/statuses";
+
+/**
+ * Face verification attempts logged by blood_connect_backend
+ * (POST /api/verification/face), newest first.
+ *
+ * Admin-read-only collection; sorted here instead of with orderBy so no
+ * composite index is needed.
+ */
+export const getFaceVerificationAttempts = async (userId, max = 50) => {
+  try {
+    const snapshot = await getDocs(
+      query(collection(db, "face_verification_attempts"), where("userId", "==", userId))
+    );
+    const millis = (value) =>
+      typeof value?.toMillis === "function" ? value.toMillis() : 0;
+
+    return snapshot.docs
+      .map((attemptDoc) => ({ ...attemptDoc.data(), id: attemptDoc.id }))
+      .sort((a, b) => millis(b.createdAt) - millis(a.createdAt))
+      .slice(0, max);
+  } catch (error) {
+    console.error(`Error fetching face attempts for ${userId}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * PRC manually approves or rejects a user's identity verification, e.g.
+ * after the automatic face match failed or the daily limit was reached.
+ *
+ * Keeps the backend's score/provider in faceVerification and records who
+ * decided. A transaction so a concurrent backend pass is not clobbered.
+ */
+export const reviewFaceVerification = async (userId, approve, adminUser, note = "") => {
+  const userRef = doc(db, "users", userId);
+  const result = approve
+    ? FaceVerificationResult.approvedByAdmin
+    : FaceVerificationResult.rejectedByAdmin;
+  const trimmedNote = String(note || "").trim();
+
+  await runTransaction(db, async (tx) => {
+    const snapshot = await tx.get(userRef);
+    if (!snapshot.exists()) throw new Error("User no longer exists.");
+
+    const current = snapshot.data();
+    if (!approve && current.faceVerified === true &&
+        current.faceVerification?.result === FaceVerificationResult.verified) {
+      throw new Error(
+        "This user passed the automatic face match. Rejecting it is not supported here."
+      );
+    }
+
+    tx.update(userRef, {
+      faceVerified: approve,
+      "faceVerification.result": result,
+      "faceVerification.method": "admin_review",
+      "faceVerification.reviewedBy": adminUser?.uid || "admin",
+      "faceVerification.reviewedByName":
+        adminUser?.displayName || adminUser?.email || "PRC Admin",
+      "faceVerification.reviewedAt": serverTimestamp(),
+      "faceVerification.reviewNote": trimmedNote || null,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  await logAdminAction(
+    adminUser,
+    approve ? "FACE_VERIFICATION_APPROVED" : "FACE_VERIFICATION_REJECTED",
+    userId,
+    trimmedNote || (approve ? "Identity approved by PRC" : "Identity rejected by PRC")
+  );
+  return { success: true, result };
+};
 
 /**
  * Get all registered users.

@@ -286,6 +286,26 @@ const AdminLayout = () => {
               {!isSidebarCollapsed && <span className="truncate">Support Chats</span>}
             </NavLink>
 
+            {/* Announcements: under development (Item 14) */}
+            <NavLink
+              to="/announcements"
+              title="Announcements (under development)"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive || isAnnouncementsPath ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                } ${isSidebarCollapsed ? "justify-center" : ""}`
+              }
+            >
+              <LuMegaphone size={18} className="shrink-0" />
+              {!isSidebarCollapsed && (
+                <>
+                  <span className="truncate">Announcements</span>
+                  <span className="ml-auto bg-amber-100 text-amber-800 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded">
+                    Soon
+                  </span>
+                </>
+              )}
+            </NavLink>
+
             {/* Announcements Accordion Menu */}
             {/* {!isSidebarCollapsed ? (
               <div>

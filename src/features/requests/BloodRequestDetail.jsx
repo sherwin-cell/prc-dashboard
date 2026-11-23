@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan } from "react-icons/lu";
@@ -79,7 +79,8 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
       });
 
       // Anonymized summary shown to donors (no patient identity, requester
-      // contact details or Blood Request Form). Only for published requests.
+      // contact details or Blood Request Form). Donors cannot read
+      // blood_requests, so this is all they see. Only for published requests.
       if (actionType === "approve") {
         batch.set(doc(db, "request_summaries", reqData.id), {
           requestId: reqData.id,
@@ -87,6 +88,8 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
           component: reqData.component ?? null,
           unitsRequired: reqData.unitsRequired ?? null,
           urgency: reqData.urgency ?? null,
+          // The hospital is shown to donors; the patient stays anonymous.
+          hospitalName: reqData.hospitalName ?? null,
           neededByDate:
             reqData.neededByDate ?? reqData.neededBy ?? reqData.requiredDate ?? null,
           status: "active",
@@ -429,4 +432,4 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
   );
 };
 
-export default BloodRequestDetail;
+export default BloodRequestDetail;

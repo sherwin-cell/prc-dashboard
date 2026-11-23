@@ -28,7 +28,8 @@ import UsersPage from '../features/users/UsersPage';
 import AdminChatListPage from '../features/chat/AdminChatListPage';
 import AdminChatRoomPage from '../features/chat/AdminChatRoomPage';
 
-// Announcements
+// Announcements (under development; the original pages are commented out)
+import AnnouncementsUnderDevelopment from '../features/announcements/AnnouncementsUnderDevelopment';
 // import CreateAnnouncementPage from '../features/announcements/CreateAnnouncementPage';
 // import PublishedAnnouncementsPage from '../features/announcements/PublishedAnnouncementsPage';
 // import ArchivedAnnouncements from '../pages/ArchivedAnnouncements';
@@ -100,6 +101,11 @@ const AppRoutes = () => {
           <Route
             path="/chat/:chatId"
             element={<AdminChatRoomPage />}
+          />
+
+          <Route
+            path="/announcements/*"
+            element={<AnnouncementsUnderDevelopment />}
           />
 
           {/* Announcements
