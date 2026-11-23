@@ -6,6 +6,7 @@ import {
   getDocs,
   serverTimestamp,
   runTransaction,
+  updateDoc,
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../../firebase/config';
@@ -412,4 +413,17 @@ export async function reconcileMatchedStatus(requestId, adminUser) {
     console.error('Error updating matched status:', error);
     return { success: false, error: error.message };
   }
+}
+
+/**
+ * PRC's review checklist on a pending request (admin-only field; requesters
+ * cannot change it, see firestore.rules):
+ *   reviewChecklist: { brfMatches, physicianVerified, idMatches, updatedAt, updatedBy }
+ */
+export async function saveReviewChecklistItem(requestId, item, checked, adminUser) {
+  await updateDoc(doc(db, 'blood_requests', requestId), {
+    [`reviewChecklist.${item}`]: checked,
+    'reviewChecklist.updatedAt': serverTimestamp(),
+    'reviewChecklist.updatedBy': adminUser?.uid || 'admin',
+  });
 }

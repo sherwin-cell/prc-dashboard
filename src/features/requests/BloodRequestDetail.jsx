@@ -1,454 +1,583 @@
-import { useEffect, useState } from "react";
-import { SecureFileLink } from "../../components/common/SecureFile";
+import { useMemo, useState } from "react";
 import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
-import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan, LuBellRing } from "react-icons/lu";
+import {
+  LuArchive,
+  LuArrowLeft,
+  LuBan,
+  LuBellRing,
+  LuCheck,
+  LuCircleCheck,
+  LuClipboardCheck,
+  LuHistory,
+  LuPackageCheck,
+  LuRotateCcw,
+  LuShieldCheck,
+  LuTrash2,
+} from "react-icons/lu";
 import { useAuth } from "../../context/useAuth";
 import RequestOffersList from "../../components/admin/RequestOffersList";
+import DocumentViewer from "../../components/common/DocumentViewer";
 import {
+  archiveRequest,
+  deleteRequest,
   markRequestFulfilled,
-  subscribeToRequest,
+  restoreRequest,
+  saveReviewChecklistItem,
 } from "../../services/firestore/requestService";
 import {
   RequestStatus,
+  canArchiveRequest,
+  isRequestArchived,
   isRequestOpen,
   requestStatusClasses,
   requestStatusLabel,
   unitsNeededOf,
 } from "../../constants/statuses";
+import PrcStockModal from "./PrcStockModal";
+import {
+  formatDate,
+  neededByOf,
+  prcStockNoticesOf,
+  requirementLabel,
+  reservedUnitsOf,
+  showsUrgency,
+  urgencyOf,
+  userNameOf,
+} from "./requestQueue";
+import { requestTimeline } from "./requestTimeline";
+import { useUserProfiles } from "./useUserProfiles";
 
 const CONFIRM_COPY = {
-  approve: { title: "Confirm Approval", verb: "approve", button: "Yes, Approve", color: "bg-emerald-600 hover:bg-emerald-700" },
-  reject: { title: "Confirm Rejection", verb: "reject", button: "Yes, Reject", color: "bg-rose-600 hover:bg-rose-700" },
-  fulfill: { title: "Mark Request Fulfilled", verb: "mark as fulfilled", button: "Yes, Mark Fulfilled", color: "bg-blue-600 hover:bg-blue-700" },
+  approve: { title: "Approve request", verb: "approve", button: "Yes, approve", color: "bg-emerald-600 hover:bg-emerald-700" },
+  reject: { title: "Reject request", verb: "reject", button: "Yes, reject", color: "bg-rose-600 hover:bg-rose-700" },
+  fulfill: { title: "Mark request fulfilled", verb: "mark as fulfilled", button: "Yes, mark fulfilled", color: "bg-blue-600 hover:bg-blue-700" },
+  archive: { title: "Archive request", verb: "archive", button: "Yes, archive", color: "bg-amber-600 hover:bg-amber-700" },
+  restore: { title: "Restore request", verb: "restore", button: "Yes, restore", color: "bg-gray-900 hover:bg-black" },
+  delete: { title: "Delete request", verb: "permanently delete", button: "Yes, delete", color: "bg-rose-600 hover:bg-rose-700" },
 };
 
-const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
+// reviewChecklist.{id} on the request (admin-only; see firestore.rules).
+const CHECKLIST = [
+  { id: "brfMatches", label: "BRF matches patient & hospital", hint: "Name, hospital and blood need on the form agree with the typed fields." },
+  { id: "physicianVerified", label: "Physician & license verified", hint: "The requesting physician's name and PRC license number are on the BRF." },
+  { id: "idMatches", label: "ID matches requester", hint: "The ID photos show the account holder who submitted the request." },
+];
+
+const TONES = {
+  gray: "bg-gray-400",
+  emerald: "bg-emerald-500",
+  rose: "bg-rose-500",
+  violet: "bg-violet-500",
+  amber: "bg-amber-500",
+  blue: "bg-blue-500",
+};
+
+const hemoglobinLabel = (value) => {
+  const text = String(value ?? "").trim();
+  if (!text) return "Not given";
+  // A bare number is hemoglobin in g/dL; anything else is shown as typed.
+  return /^\d+(\.\d+)?$/.test(text) ? `${text} g/dL` : text;
+};
+
+const Field = ({ label, children }) => (
+  <div className="min-w-0">
+    <dt className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</dt>
+    <dd className="mt-0.5 break-words text-xs font-medium text-gray-900">{children || <span className="text-gray-400">N/A</span>}</dd>
+  </div>
+);
+
+const Card = ({ title, icon, children, className = "" }) => (
+  <section className={`rounded-2xl border border-gray-200 bg-white p-4 shadow-xs ${className}`}>
+    <h3 className="mb-3 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-gray-500">
+      {icon}
+      {title}
+    </h3>
+    {children}
+  </section>
+);
+
+const BloodRequestDetail = ({ request: reqData, requester, onBack }) => {
   const { currentUser } = useAuth();
-  const [reqData, setReqData] = useState(request);
   const [actionError, setActionError] = useState("");
-  // Shown to the requester in the app (rejectionReason).
-  const [rejectionReason, setRejectionReason] = useState("");
+  const [notice, setNotice] = useState("");
+  const [rejectionReason, setRejectionReason] = useState(""); // shown to the requester in the app
+  const [confirm, setConfirm] = useState(null); // CONFIRM_COPY key
+  const [busy, setBusy] = useState(false);
+  const [stockOpen, setStockOpen] = useState(false);
+  const [savingItem, setSavingItem] = useState("");
 
-  // Keep the request live so a cancellation from the mobile app shows up
-  // immediately and PRC stops acting on it.
-  useEffect(() => {
-    return subscribeToRequest(
-      request.id,
-      (latest) => {
-        if (latest) setReqData(latest);
-      },
-      (error) => console.error("Error listening to blood request:", error)
-    );
-  }, [request.id]);
-  const [confirmModal, setConfirmModal] = useState({ isOpen: false, actionType: null });
+  const status = reqData.status || RequestStatus.pending;
+  const isPending = status === RequestStatus.pending;
+  const archived = isRequestArchived(reqData);
+  const open = isRequestOpen(status) && !archived;
+  const units = unitsNeededOf(reqData);
+  const reserved = reservedUnitsOf(reqData);
+  const urgency = urgencyOf(reqData);
+  const id = reqData.idVerification || {};
+  const hasIdPhotos = Boolean(id.frontIdImageUrl || id.backIdImageUrl);
+  const requesterName = userNameOf(requester) || "Unknown requester";
 
-  const handleConfirmAction = async () => {
-    const actionType = confirmModal.actionType;
-    if (!actionType) return;
+  const checklist = reqData.reviewChecklist || {};
+  const requiredItems = CHECKLIST.filter((item) => item.id !== "idMatches" || hasIdPhotos);
+  const checklistDone = requiredItems.every((item) => checklist[item.id] === true);
+
+  const timeline = useMemo(() => requestTimeline(reqData), [reqData]);
+  const actorIds = useMemo(() => timeline.map((e) => e.actorId), [timeline]);
+  const actors = useUserProfiles(actorIds);
+  const actorName = (uid) => {
+    if (!uid) return "";
+    if (uid === currentUser?.uid) return "you";
+    return userNameOf(actors[uid]) || (uid === (reqData.requesterId || reqData.userId) ? "the requester" : "PRC admin");
+  };
+
+  const flash = (message) => {
+    setNotice(message);
+    setTimeout(() => setNotice(""), 5000);
+  };
+
+  const toggleChecklist = async (item, checked) => {
+    setSavingItem(item);
     setActionError("");
-
-    if (actionType === "fulfill") {
-      const result = await markRequestFulfilled(reqData.id, currentUser);
-      if (result.success) {
-        const updated = { ...reqData, status: RequestStatus.fulfilled };
-        setReqData(updated);
-        if (onUpdateStatus) onUpdateStatus(updated);
-      } else {
-        setActionError(result.error || "Could not mark the request fulfilled.");
-      }
-      setConfirmModal({ isOpen: false, actionType: null });
-      return;
-    }
-
-    if (reqData.status !== RequestStatus.pending) {
-      setActionError(`This request is "${requestStatusLabel(reqData.status)}" and can no longer be reviewed.`);
-      setConfirmModal({ isOpen: false, actionType: null });
-      return;
-    }
-
     try {
-      // A published (PRC-approved) blood request is "active"; the ID
-      // verification submission keeps its own approved/rejected status.
-      const newStatus = actionType === "approve" ? "active" : "rejected";
-      const reason = rejectionReason.trim();
-      if (actionType === "reject" && !reason) {
-        setActionError("Enter a reason for the requester before rejecting.");
-        return;
-      }
-      const idVerificationStatus = actionType === "approve" ? "approved" : "rejected";
-      const submissionId = reqData.idVerificationSubmissionId;
+      await saveReviewChecklistItem(reqData.id, item, checked, currentUser);
+    } catch (error) {
+      setActionError(error.message || "Could not save the checklist.");
+    } finally {
+      setSavingItem("");
+    }
+  };
 
-      const batch = writeBatch(db);
-      const requestRef = doc(db, "blood_requests", reqData.id);
+  const review = async (actionType) => {
+    if (reqData.status !== RequestStatus.pending) {
+      throw new Error(`This request is "${requestStatusLabel(reqData.status)}" and can no longer be reviewed.`);
+    }
+    const reason = rejectionReason.trim();
+    if (actionType === "reject" && !reason) throw new Error("Enter a reason for the requester before rejecting.");
+    if (actionType === "approve" && !checklistDone) throw new Error("Complete the review checklist before approving.");
 
-      batch.update(requestRef, {
-        status: newStatus,
-        // The backend times the approval/rejection notice from reviewedAt.
-        reviewedAt: serverTimestamp(),
-        reviewedBy: currentUser?.uid || "admin",
-        // The app shows this on the rejected request (RequestProgress).
-        ...(actionType === "reject" ? { rejectionReason: reason } : {}),
+    // A published (PRC-approved) blood request is "active"; the ID
+    // verification submission keeps its own approved/rejected status.
+    const newStatus = actionType === "approve" ? RequestStatus.active : RequestStatus.rejected;
+    const batch = writeBatch(db);
+    batch.update(doc(db, "blood_requests", reqData.id), {
+      status: newStatus,
+      // The backend times the approval/rejection notice from reviewedAt.
+      reviewedAt: serverTimestamp(),
+      reviewedBy: currentUser?.uid || "admin",
+      ...(actionType === "reject" ? { rejectionReason: reason } : {}),
+      updatedAt: serverTimestamp(),
+    });
+
+    // Anonymized summary shown to donors (no patient identity, requester
+    // contact details or Blood Request Form). Only for published requests.
+    if (actionType === "approve") {
+      batch.set(doc(db, "request_summaries", reqData.id), {
+        requestId: reqData.id,
+        bloodType: reqData.bloodType ?? null,
+        component: reqData.component ?? null,
+        unitsRequired: reqData.unitsRequired ?? null,
+        urgency: reqData.urgency ?? null,
+        // The hospital is shown to donors; the patient stays anonymous.
+        hospitalName: reqData.hospitalName ?? null,
+        neededByDate: reqData.neededByDate ?? reqData.neededBy ?? reqData.requiredDate ?? null,
+        status: RequestStatus.active,
+        createdAt: reqData.createdAt ?? serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+    }
 
-      // Anonymized summary shown to donors (no patient identity, requester
-      // contact details or Blood Request Form). Donors cannot read
-      // blood_requests, so this is all they see. Only for published requests.
-      if (actionType === "approve") {
-        batch.set(doc(db, "request_summaries", reqData.id), {
-          requestId: reqData.id,
-          bloodType: reqData.bloodType ?? null,
-          component: reqData.component ?? null,
-          unitsRequired: reqData.unitsRequired ?? null,
-          urgency: reqData.urgency ?? null,
-          // The hospital is shown to donors; the patient stays anonymous.
-          hospitalName: reqData.hospitalName ?? null,
-          neededByDate:
-            reqData.neededByDate ?? reqData.neededBy ?? reqData.requiredDate ?? null,
-          status: "active",
-          createdAt: reqData.createdAt ?? serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+    if (reqData.idVerificationSubmissionId) {
+      batch.update(doc(db, "id_verifications", reqData.idVerificationSubmissionId), {
+        status: actionType === "approve" ? "approved" : "rejected",
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+    setRejectionReason("");
+    return actionType === "approve" ? "Request approved. Matching donors are being alerted." : "Request rejected. The requester sees your reason in the app.";
+  };
+
+  const runConfirmed = async () => {
+    const action = confirm;
+    if (!action) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      let message;
+      if (action === "approve" || action === "reject") {
+        message = await review(action);
+      } else {
+        const run = { fulfill: markRequestFulfilled, archive: archiveRequest, restore: restoreRequest, delete: deleteRequest }[action];
+        const result = await run(reqData.id, currentUser);
+        if (!result.success) throw new Error(result.error || `Could not ${CONFIRM_COPY[action].verb} the request.`);
+        message = {
+          fulfill: `Marked fulfilled${result.declined ? `; ${result.declined} waiting offer(s) declined` : ""}.`,
+          archive: "Request archived. It is in the Archived tab.",
+          restore: "Request restored.",
+          delete: "Request deleted.",
+        }[action];
+        if (action === "delete") {
+          setConfirm(null);
+          onBack();
+          return;
+        }
       }
-
-      if (submissionId) {
-        const verificationRef = doc(db, "id_verifications", submissionId);
-        batch.update(verificationRef, {
-          status: idVerificationStatus,
-          updatedAt: serverTimestamp(),
-        });
-      }
-
-      await batch.commit();
-
-      const updated = {
-        ...reqData,
-        status: newStatus,
-        ...(actionType === "reject" ? { rejectionReason: reason } : {}),
-      };
-      setReqData(updated);
-      if (onUpdateStatus) onUpdateStatus(updated);
-
-      setRejectionReason("");
-      setConfirmModal({ isOpen: false, actionType: null });
+      flash(message);
+      setConfirm(null);
     } catch (error) {
-      console.error(`Error ${actionType}ing request:`, error);
-      setActionError(error.message || `Could not ${actionType} the request.`);
-      setConfirmModal({ isOpen: false, actionType: null });
+      console.error(`Error (${action}) on request:`, error);
+      setActionError(error.message || "Something went wrong.");
+      setConfirm(null);
+    } finally {
+      setBusy(false);
     }
   };
 
-  const formatDate = (val) => {
-    if (!val) return "Not Specified";
-    if (val.seconds) {
-      return new Date(val.seconds * 1000).toLocaleDateString();
-    }
-    return val;
-  };
+  const documents = [
+    { id: "brf", label: "BRF PDF", type: "pdf", value: reqData.brfFileUrl },
+    { id: "front", label: "Front ID", type: "image", value: id.frontIdImageUrl },
+    { id: "back", label: "Back ID", type: "image", value: id.backIdImageUrl },
+  ];
+
+  const btn = "inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+  const needsChecklist = isPending && !checklistDone;
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto p-4 sm:p-6">
-      {/* Back Button & Header */}
-      <div className="flex items-center gap-3 border-b pb-4">
-        <button
-          onClick={onBack}
-          className="p-2 rounded-full hover:bg-gray-100 text-gray-600 transition"
-          title="Back to List"
-        >
-          <LuArrowLeft size={20} />
-        </button>
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Blood Request Details</h1>
-          <p className="text-xs text-gray-500">Comprehensive overview of patient request, medical records, and verification status</p>
-        </div>
-      </div>
-
-      {reqData.status === RequestStatus.cancelled && (
-        <div role="status" className="flex items-start gap-2.5 p-4 bg-gray-100 border border-gray-300 text-gray-800 rounded-2xl text-xs">
-          <LuBan size={18} className="shrink-0 mt-0.5" />
-          <div>
-            <p className="font-bold">The requester cancelled this request.</p>
-            <p className="text-gray-600">No further PRC action is needed. Pending donor offers can still be declined to close them out.</p>
-          </div>
-        </div>
-      )}
-
-      {actionError && (
-        <div role="alert" className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-semibold">
-          {actionError}
-        </div>
-      )}
-
-      {/* Detailed Card Layout */}
-      <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-xs space-y-5">
-        {/* Top Info */}
-        <div className="flex justify-between items-start">
-          <div>
-            <h3 className="font-bold text-lg text-gray-900">{reqData.patientName || "Unnamed Patient"}</h3>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-xs text-gray-500">Status:</span>
-              <span
-                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${requestStatusClasses(reqData.status)}`}
-              >
-                {requestStatusLabel(reqData.status)}
+    <div className="h-full overflow-y-auto">
+      {/* Sticky header: who, what, where it stands, and what PRC can do. */}
+      <header className="sticky top-0 z-20 border-b border-gray-200 bg-white/95 px-5 py-4 backdrop-blur">
+        <div className="flex flex-wrap items-start gap-3">
+          <button onClick={onBack} className="rounded-full p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden" title="Back to the queue">
+            <LuArrowLeft size={18} />
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-lg font-bold text-gray-900">{reqData.patientName || "Unnamed patient"}</h2>
+              <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${requestStatusClasses(status)}`}>
+                {requestStatusLabel(status)}
               </span>
-            </div>
-          </div>
-          <div className="flex flex-col items-end gap-1">
-            <span className="px-3 py-1 bg-red-50 text-[#D32F2F] text-xs font-extrabold rounded-full border border-red-100">
-              {reqData.bloodType || "O+"}
-            </span>
-            <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
-              {reqData.urgency || "Normal"} Urgency
-            </span>
-          </div>
-        </div>
-
-        {/* 1. Patient Details Grid */}
-        <div>
-          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Patient Profile</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Patient Name:</strong>
-              <span className="text-gray-900 font-medium">{reqData.patientName || "N/A"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Age / Sex / Birthday:</strong>
-              <span className="text-gray-900 font-medium">
-                {reqData.patientAge || "N/A"} yrs / {reqData.patientSex || "N/A"} / {reqData.patientBirthday || "N/A"}
-              </span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Contact Number:</strong>
-              <span className="text-gray-900 font-medium">{reqData.contactNumber || "N/A"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Relative / Contact Person:</strong>
-              <span className="text-gray-900 font-medium">{reqData.relativeName || "N/A"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Relationship to Patient:</strong>
-              <span className="text-gray-900 font-semibold">{reqData.relationship || "Not specified"}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 2. Blood Specifications Grid */}
-        <div>
-          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Blood & Clinical Specifications</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Blood Type Needed:</strong>
-              <span className="text-gray-900 font-medium">{reqData.bloodType || "O+"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Units Required:</strong>
-              <span className="text-gray-900 font-medium">{reqData.unitsRequired || reqData.unitsNeeded || 1}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Blood Component:</strong>
-              <span className="text-gray-900 font-medium">{reqData.component || "Whole Blood"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Hemoglobin / Hematocrit:</strong>
-              <span className="text-gray-900 font-medium">{reqData.hemoglobin || "N/A"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Target Date Needed:</strong>
-              <span className="text-gray-900 font-medium">{formatDate(reqData.neededByDate || reqData.requiredDate)}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 3. Hospital & Physician Information */}
-        <div>
-          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Hospital & Physician Information</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs text-gray-600 bg-gray-50 p-4 rounded-xl border border-gray-100">
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Hospital Name:</strong>
-              <span className="text-gray-900 font-medium">{reqData.hospitalName || reqData.hospital || "N/A"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Clinical Diagnosis:</strong>
-              <span className="text-gray-900 font-medium">{reqData.clinicalDiagnosis || "N/A"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Attending Physician:</strong>
-              <span className="text-gray-900 font-medium">{reqData.attendingPhysician || "N/A"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">Requesting Physician & License:</strong>
-              <span className="text-gray-900 font-medium">{reqData.requestingPhysician || "N/A"}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">BRF Document Date:</strong>
-              <span className="text-gray-900 font-medium">{formatDate(reqData.brfDate)}</span>
-            </div>
-            <div>
-              <strong className="text-gray-700 block mb-0.5">
-                BRF PDF File:
-              </strong>
-
-              {reqData.brfFileUrl ? (
-                <div className="mt-1 flex flex-col gap-2">
-                  <span className="text-gray-900 font-medium break-all">
-                    {reqData.brfFileName || "Blood Request Form.pdf"}
-                  </span>
-
-                  <SecureFileLink value={reqData.brfFileUrl} className="inline-flex items-center gap-2 w-fit px-3 py-1.5
-                   bg-red-50 text-[#D32F2F]
-                   border border-red-100
-                   rounded-lg text-xs font-semibold
-                   hover:bg-red-100 transition">
-                    <LuFileText size={15} />
-                    View BRF PDF
-                  </SecureFileLink>
-                </div>
-              ) : (
-                <span className="text-gray-400">
-                  No BRF PDF uploaded
+              {archived && <span className="rounded-full bg-gray-200 px-2.5 py-0.5 text-[10px] font-bold uppercase text-gray-700">Archived</span>}
+              {reserved > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-0.5 text-[10px] font-bold uppercase text-violet-800">
+                  <LuPackageCheck size={11} /> PRC stock ready
                 </span>
               )}
             </div>
+            <p className="mt-0.5 text-xs text-gray-500">
+              Requested by <span className="font-semibold text-gray-700">{requesterName}</span>
+              {requester?.email ? ` · ${requester.email}` : ""} · submitted {formatDate(reqData.createdAt, true)}
+            </p>
+            <span className="mt-2 inline-flex items-center gap-2 rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-extrabold text-[#D32F2F]">
+              {requirementLabel(reqData)}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {isPending && !archived && (
+              <>
+                <button className={`${btn} border border-rose-200 text-rose-700 hover:bg-rose-50`} onClick={() => setConfirm("reject")}>
+                  Reject
+                </button>
+                <button
+                  className={`${btn} bg-emerald-600 text-white shadow-xs hover:bg-emerald-700`}
+                  disabled={needsChecklist}
+                  title={needsChecklist ? "Complete the review checklist first" : undefined}
+                  onClick={() => setConfirm("approve")}
+                >
+                  <LuCheck size={14} /> Approve
+                </button>
+              </>
+            )}
+            {(isPending || open) && !archived && (
+              <button
+                className={`${btn} bg-violet-600 text-white shadow-xs hover:bg-violet-700`}
+                disabled={needsChecklist}
+                title={needsChecklist ? "Complete the review checklist first" : "Tell the requester PRC has the blood"}
+                onClick={() => setStockOpen(true)}
+              >
+                <LuPackageCheck size={14} /> Notify: Blood Available at PRC
+              </button>
+            )}
+            {open && (
+              <button className={`${btn} bg-blue-600 text-white shadow-xs hover:bg-blue-700`} onClick={() => setConfirm("fulfill")}>
+                <LuCircleCheck size={14} /> Mark fulfilled
+              </button>
+            )}
+            {!archived && canArchiveRequest(status) && (
+              <button className={`${btn} border border-gray-200 text-gray-600 hover:bg-gray-50`} onClick={() => setConfirm("archive")}>
+                <LuArchive size={14} /> Archive
+              </button>
+            )}
+            {archived && (
+              <button className={`${btn} border border-gray-200 text-gray-700 hover:bg-gray-50`} onClick={() => setConfirm("restore")}>
+                <LuRotateCcw size={14} /> Restore
+              </button>
+            )}
+            {(archived || canArchiveRequest(status)) && (
+              <button className={`${btn} text-gray-400 hover:bg-rose-50 hover:text-rose-700`} onClick={() => setConfirm("delete")} title="Delete request">
+                <LuTrash2 size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+        {needsChecklist && !archived && (
+          <p className="mt-2 text-[11px] text-amber-700">Complete the review checklist below to approve or reserve PRC stock.</p>
+        )}
+      </header>
+
+      <div className="space-y-4 p-5">
+        {notice && (
+          <div role="status" className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-900">
+            <LuCheck size={16} className="shrink-0 text-emerald-600" /> {notice}
+          </div>
+        )}
+        {actionError && (
+          <div role="alert" className="flex items-start justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-800">
+            <span>{actionError}</span>
+            <button onClick={() => setActionError("")} className="font-bold text-rose-500 hover:text-rose-700">Dismiss</button>
+          </div>
+        )}
+        {status === RequestStatus.cancelled && (
+          <div role="status" className="flex items-start gap-2.5 rounded-2xl border border-gray-300 bg-gray-100 p-3 text-xs text-gray-800">
+            <LuBan size={16} className="mt-0.5 shrink-0" />
+            <div>
+              <p className="font-bold">The requester cancelled this request.</p>
+              <p className="text-gray-600">No further PRC action is needed. Waiting donor offers can still be declined to close them out.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Clinical summary strip */}
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-gray-200 bg-gray-200 sm:grid-cols-3 xl:grid-cols-5">
+          {[
+            ["Blood type", <span className="text-lg font-black text-[#D32F2F]">{reqData.bloodType || "?"}</span>],
+            ["Units required", <span className="text-lg font-black tabular-nums text-gray-900">{units}</span>],
+            ["Component", <span className="text-sm font-bold text-gray-900">{reqData.component || "Whole Blood"}</span>],
+            ["Hgb / Hct (g/dL · %)", <span className="text-sm font-bold text-gray-900">{hemoglobinLabel(reqData.hemoglobin)}</span>],
+            [
+              "Target date needed",
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm font-bold text-gray-900">{neededByOf(reqData) ? formatDate(neededByOf(reqData)) : "Not set"}</span>
+                {showsUrgency(reqData) && (
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset ${urgency.classes}`}>{urgency.label}</span>
+                )}
+              </span>,
+            ],
+          ].map(([label, value]) => (
+            <div key={label} className="bg-white px-4 py-3">
+              <dt className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</dt>
+              <dd className="mt-1">{value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        {/* Review: typed fields and checklist beside the documents */}
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="space-y-4">
+            <Card title="Patient profile">
+              <dl className="grid grid-cols-2 gap-3">
+                <Field label="Patient name">{reqData.patientName}</Field>
+                <Field label="Age / sex">
+                  {[reqData.patientAge && `${reqData.patientAge} yrs`, reqData.patientSex].filter(Boolean).join(" / ")}
+                </Field>
+                <Field label="Birthday">{reqData.patientBirthday}</Field>
+                <Field label="Contact number">{reqData.contactNumber}</Field>
+                <Field label="Relative / contact person">{reqData.relativeName}</Field>
+                <Field label="Relationship">{reqData.relationship}</Field>
+              </dl>
+            </Card>
+
+            <Card title="Hospital & physician information">
+              <dl className="grid grid-cols-2 gap-3">
+                <Field label="Hospital">{reqData.hospitalName || reqData.hospital}</Field>
+                <Field label="Clinical diagnosis">{reqData.clinicalDiagnosis}</Field>
+                <Field label="Attending physician">{reqData.attendingPhysician}</Field>
+                <Field label="Requesting physician & license">{reqData.requestingPhysician}</Field>
+                <Field label="BRF date">{reqData.brfDate ? formatDate(reqData.brfDate) : null}</Field>
+                <Field label="BRF file">{reqData.brfFileUrl ? reqData.brfFileName || "Blood Request Form.pdf" : null}</Field>
+              </dl>
+            </Card>
+
+            <Card title="Review checklist" icon={<LuClipboardCheck size={14} />}>
+              <ul className="space-y-2">
+                {CHECKLIST.map((item) => {
+                  const notApplicable = item.id === "idMatches" && !hasIdPhotos;
+                  const checked = checklist[item.id] === true;
+                  return (
+                    <li key={item.id}>
+                      <label className={`flex items-start gap-2.5 rounded-xl border p-2.5 ${checked ? "border-emerald-200 bg-emerald-50/60" : "border-gray-200"} ${isPending && !notApplicable ? "cursor-pointer" : ""}`}>
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 accent-emerald-600"
+                          checked={checked}
+                          disabled={!isPending || notApplicable || archived || savingItem === item.id}
+                          onChange={(e) => toggleChecklist(item.id, e.target.checked)}
+                        />
+                        <span>
+                          <span className="block text-xs font-semibold text-gray-900">{item.label}</span>
+                          <span className="block text-[11px] text-gray-500">
+                            {notApplicable ? "No ID photos are attached to this request, so this is not required." : item.hint}
+                          </span>
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+              {checklist.updatedAt && (
+                <p className="mt-2 text-[10px] text-gray-400">
+                  Last updated {formatDate(checklist.updatedAt, true)}
+                  {checklist.updatedBy ? ` by ${actorName(checklist.updatedBy) || "PRC admin"}` : ""}
+                </p>
+              )}
+              {!isPending && (
+                <p className="mt-2 text-[10px] text-gray-400">Read-only: this request has already been reviewed.</p>
+              )}
+            </Card>
+
+            {hasIdPhotos || reqData.idVerification ? (
+              <div className="flex items-center justify-between gap-2 rounded-2xl border border-blue-100 bg-blue-50/50 px-4 py-3 text-xs">
+                <span className="flex items-center gap-1.5 font-semibold text-blue-900">
+                  <LuShieldCheck size={15} className="text-blue-600" />
+                  {id.idType || "Government ID"}
+                  {id.idNumber ? ` · ${id.idNumber}` : ""}
+                </span>
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-800">
+                  {id.validationStatus || "submitted"}
+                </span>
+              </div>
+            ) : (
+              <p className="rounded-2xl border border-gray-200 bg-gray-50 p-3 text-xs italic text-gray-500">
+                No identity verification is attached to this request.
+              </p>
+            )}
+          </div>
+
+          <div className="xl:sticky xl:top-36 xl:self-start">
+            <DocumentViewer documents={documents} />
           </div>
         </div>
 
-        {/* Notes & Other Info */}
-        {reqData.notes && (
-          <div className="bg-amber-50/70 border border-amber-200/60 p-3.5 rounded-xl text-xs space-y-1">
-            <strong className="text-amber-900 block font-bold uppercase tracking-wider text-[10px]">
-              Special Notes:
-            </strong>
-            <p className="text-amber-950 font-medium italic">"{reqData.notes}"</p>
+        {(reqData.notes || reqData.otherInfo) && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {reqData.notes && (
+              <div className="rounded-2xl border border-amber-200/60 bg-amber-50/70 p-3.5 text-xs">
+                <strong className="block text-[10px] font-bold uppercase tracking-wider text-amber-900">Special notes</strong>
+                <p className="mt-1 font-medium italic text-amber-950">"{reqData.notes}"</p>
+              </div>
+            )}
+            {reqData.otherInfo && (
+              <div className="rounded-2xl border border-gray-200 bg-white p-3.5 text-xs">
+                <strong className="block text-[10px] font-bold uppercase tracking-wider text-gray-600">Other information</strong>
+                <p className="mt-1 font-medium text-gray-900">{reqData.otherInfo}</p>
+              </div>
+            )}
           </div>
         )}
 
-        {reqData.otherInfo && (
-          <div className="bg-gray-50 border border-gray-200 p-3.5 rounded-xl text-xs space-y-1">
-            <strong className="text-gray-800 block font-bold uppercase tracking-wider text-[10px]">
-              Other Information:
-            </strong>
-            <p className="text-gray-900 font-medium">{reqData.otherInfo}</p>
-          </div>
-        )}
-
-        {/* ID Verification Section */}
-        {reqData.idVerification ? (
-          <div className="border border-blue-100 bg-blue-50/40 p-4 rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center gap-1.5">
-                <LuShieldCheck size={16} className="text-blue-600" />
-                ID Verification ({reqData.idVerification.idType || "Government ID"})
-              </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase bg-emerald-100 text-emerald-800">
-                {reqData.idVerification.validationStatus || "verified"}
-              </span>
-            </div>
-
-            <div className="flex gap-4 pt-2 border-t border-blue-100/60">
-              {reqData.idVerification.frontIdImageUrl && (
-                <SecureFileLink value={reqData.idVerification.frontIdImageUrl} className="text-xs text-[#D32F2F] font-semibold flex items-center gap-1 hover:underline">
-                  View Front ID
-                </SecureFileLink>
-              )}
-              {reqData.idVerification.backIdImageUrl && (
-                <SecureFileLink value={reqData.idVerification.backIdImageUrl} className="text-xs text-[#D32F2F] font-semibold flex items-center gap-1 hover:underline">
-                  View Back ID
-                </SecureFileLink>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-500 italic">
-            No identity verification attached to this specific request entry.
-          </div>
-        )}
-
-        {/* Action Controls */}
-        <div className="flex gap-3 pt-2">
-          {reqData.status === "pending" ? (
-            <>
-              <button
-                onClick={() => setConfirmModal({ isOpen: true, actionType: "reject" })}
-                className="flex-1 px-4 py-2.5 text-xs font-semibold text-rose-700 border border-rose-200 hover:bg-rose-50 rounded-xl transition-colors"
-              >
-                Reject Request
-              </button>
-              <button
-                onClick={() => setConfirmModal({ isOpen: true, actionType: "approve" })}
-                className="flex-1 px-4 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-xs"
-              >
-                Approve Request
-              </button>
-            </>
-          ) : isRequestOpen(reqData.status) ? (
-            <button
-              onClick={() => setConfirmModal({ isOpen: true, actionType: "fulfill" })}
-              className="flex-1 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-colors shadow-xs"
-            >
-              Mark Request Fulfilled
-            </button>
-          ) : (
-            <div className="w-full text-center py-2 text-xs font-medium text-gray-400 bg-gray-50 rounded-xl border border-gray-100 uppercase tracking-wider">
-              {requestStatusLabel(reqData.status)}
-            </div>
-          )}
-        </div>
-
-        {reqData.status === RequestStatus.rejected && (reqData.rejectionReason || reqData.adminNotes) && (
-          <div className="p-3.5 rounded-xl border border-rose-100 bg-rose-50/60 text-xs text-rose-900">
+        {status === RequestStatus.rejected && (reqData.rejectionReason || reqData.adminNotes) && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50/60 p-3.5 text-xs text-rose-900">
             <span className="font-bold">Reason shown to the requester:</span> {reqData.rejectionReason || reqData.adminNotes}
           </div>
         )}
 
-        {/* Donors alerted on approval: written by blood_connect_backend
-            (notification worker) as matchingDonorsNotified; only a count. */}
-        {reqData.status && reqData.status !== RequestStatus.pending && reqData.status !== RequestStatus.rejected && (
-          <div className="flex items-start gap-2.5 p-3.5 rounded-xl border border-blue-100 bg-blue-50/60 text-xs">
-            <LuBellRing size={16} className="text-blue-600 shrink-0 mt-0.5" />
-            {typeof reqData.matchingDonorsNotified === "number" ? (
+        {reqData.prcStock && (
+          <Card title="Blood reserved at PRC" icon={<LuPackageCheck size={14} className="text-violet-600" />} className="border-violet-200">
+            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-xs text-gray-700">
+              <span>
+                <span className="text-2xl font-black tabular-nums text-violet-700">{reserved}</span> of {units} unit{units === 1 ? "" : "s"} reserved
+              </span>
+              <span>Requester notified {formatDate(reqData.prcStock.notifiedAt, true)}</span>
+              <span>{reqData.prcStock.chatMessageSent ? "Support chat message sent" : "No support chat message"}</span>
+            </div>
+            <p className="mt-2 rounded-xl bg-violet-50 p-3 text-xs text-violet-950">{reqData.prcStock.pickupInstructions}</p>
+          </Card>
+        )}
+
+        {/* Donors alerted on approval: matchingDonorsNotified, written by
+            blood_connect_backend (notification worker); only a count. */}
+        {!isPending && status !== RequestStatus.rejected && (
+          <div className="flex items-start gap-2.5 rounded-2xl border border-blue-100 bg-blue-50/60 p-3.5 text-xs text-blue-900">
+            <LuBellRing size={16} className="mt-0.5 shrink-0 text-blue-600" />
+            {prcStockNoticesOf(reqData)[0]?.approvedRequest && reserved >= units ? (
+              <p>PRC covered every unit from its own stock when approving, so no donors were alerted.</p>
+            ) : typeof reqData.matchingDonorsNotified === "number" ? (
               reqData.matchingDonorsNotified > 0 ? (
-                <p className="text-blue-900">
-                  <span className="font-black tabular-nums">{reqData.matchingDonorsNotified}</span>{" "}
-                  matching donor{reqData.matchingDonorsNotified === 1 ? "" : "s"} alerted when this request was approved.
+                <p>
+                  <span className="font-black tabular-nums">{reqData.matchingDonorsNotified}</span> matching donor
+                  {reqData.matchingDonorsNotified === 1 ? "" : "s"} alerted when this request was approved.
                 </p>
               ) : (
-                <p className="text-blue-900">
-                  <span className="font-bold">No matching donors were alerted.</span> Either the requester has no
-                  municipality or province on their profile, or no available {reqData.bloodType || ""} donors live nearby.
-                  The request is still listed for donors in the app.
+                <p>
+                  <span className="font-bold">No matching donors were alerted.</span> Either the requester has no municipality or
+                  province on their profile, or no available {reqData.bloodType || ""} donors live nearby. The request is still
+                  listed for donors in the app.
                 </p>
               )
             ) : (
-              <p className="text-blue-900">
-                Donor alerts not recorded yet. The backend notification worker records the count shortly after
-                approval; if this stays empty, check that the backend is running.
+              <p>
+                Donor alerts not recorded yet. The backend notification worker records the count shortly after approval; if this
+                stays empty, check that the backend is running.
               </p>
             )}
           </div>
         )}
 
-        {/* Donor offers (only once PRC has reviewed the request) */}
-        {reqData.status && reqData.status !== RequestStatus.pending && reqData.status !== RequestStatus.rejected && (
-          <div className="border-t border-gray-100 pt-4">
-            <RequestOffersList requestId={reqData.id} requestStatus={reqData.status} unitsNeeded={unitsNeededOf(reqData)} />
-          </div>
+        {!isPending && status !== RequestStatus.rejected && (
+          <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-xs">
+            <RequestOffersList requestId={reqData.id} requestStatus={status} unitsNeeded={units} />
+          </section>
         )}
+
+        <Card title="Activity timeline" icon={<LuHistory size={14} />}>
+          {timeline.length === 0 ? (
+            <p className="text-xs text-gray-400">No recorded activity yet.</p>
+          ) : (
+            <ol className="relative space-y-4 border-l border-gray-200 pl-5">
+              {timeline.map((event) => (
+                <li key={event.key} className="relative">
+                  <span className={`absolute -left-[25px] top-1 h-2.5 w-2.5 rounded-full ring-4 ring-white ${TONES[event.tone]}`} />
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <p className="text-xs font-semibold text-gray-900">{event.title}</p>
+                    <time className="text-[11px] tabular-nums text-gray-400" dateTime={event.at.toISOString()}>
+                      {formatDate(event.at, true)}
+                    </time>
+                  </div>
+                  {event.actorId && <p className="text-[11px] text-gray-500">by {actorName(event.actorId)}</p>}
+                  {event.detail && <p className="mt-1 text-[11px] text-gray-600">{event.detail}</p>}
+                </li>
+              ))}
+            </ol>
+          )}
+        </Card>
       </div>
 
-      {/* Confirmation Modal */}
-      {confirmModal.isOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
-            <h3 className="text-lg font-bold text-gray-900">
-              {CONFIRM_COPY[confirmModal.actionType]?.title}
-            </h3>
+      {stockOpen && (
+        <PrcStockModal
+          request={reqData}
+          adminUser={currentUser}
+          onClose={() => setStockOpen(false)}
+          onDone={(result) => {
+            setStockOpen(false);
+            const parts = ["Requester notified that blood is available at PRC."];
+            if (result.approved) parts.push(result.publishedToDonors ? "Request approved; the remaining units were opened to donors." : "Request approved.");
+            if (!result.notificationCreated) parts.push("(They had already been notified of this exact notice.)");
+            if (result.chatMessageSent) parts.push("Support chat message sent.");
+            flash(parts.join(" "));
+          }}
+        />
+      )}
+
+      {confirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-xl">
+            <h3 className="text-lg font-bold text-gray-900">{CONFIRM_COPY[confirm].title}</h3>
             <p className="text-sm text-gray-600">
-              Are you sure you want to <span className="font-semibold">{CONFIRM_COPY[confirmModal.actionType]?.verb}</span> the blood request for{" "}
-              <span className="font-semibold text-gray-900">{reqData.patientName}</span>?
+              Are you sure you want to <span className="font-semibold">{CONFIRM_COPY[confirm].verb}</span> the blood request for{" "}
+              <span className="font-semibold text-gray-900">{reqData.patientName || "this patient"}</span>?
             </p>
-            {confirmModal.actionType === "reject" && (
+            {confirm === "reject" && (
               <label className="block text-xs font-semibold text-gray-700">
                 Reason shown to the requester
                 <textarea
@@ -457,29 +586,35 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
                   rows={3}
                   maxLength={500}
                   placeholder="e.g. The Blood Request Form is unreadable. Please submit a new request with a clear photo."
-                  className="mt-1 w-full rounded-xl border border-gray-300 p-2.5 text-xs font-normal text-gray-800 focus:outline-none focus:border-rose-500"
+                  className="mt-1 w-full rounded-xl border border-gray-300 p-2.5 text-xs font-normal text-gray-800 focus:border-rose-500 focus:outline-none"
                 />
               </label>
             )}
-            {confirmModal.actionType === "fulfill" && (
+            {confirm === "approve" && (
+              <p className="text-xs text-gray-500">The request is published to matching donors and they are alerted.</p>
+            )}
+            {confirm === "fulfill" && (
               <p className="text-xs text-gray-500">
-                Offers still waiting for PRC are declined automatically and those donors are told they were not
-                needed. Confirmed donors stay, so you can still record their donations.
+                Offers still waiting for PRC are declined automatically and those donors are told they were not needed. Confirmed
+                donors stay, so you can still record their donations.
               </p>
             )}
-            <div className="flex gap-3 pt-4">
-              <button
-                onClick={() => setConfirmModal({ isOpen: false, actionType: null })}
-                className="flex-1 px-4 py-2.5 text-xs font-semibold text-gray-700 border border-gray-300 hover:bg-gray-50 rounded-xl transition-colors"
-              >
+            {confirm === "archive" && (
+              <p className="text-xs text-gray-500">The requester keeps seeing its final status in the app. You can restore it from the Archived tab.</p>
+            )}
+            {confirm === "delete" && (
+              <p className="text-xs text-gray-500">This permanently removes the request, its donor offers and its donor-facing summary. It cannot be undone.</p>
+            )}
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setConfirm(null)} className="flex-1 rounded-xl border border-gray-300 px-4 py-2.5 text-xs font-semibold text-gray-700 hover:bg-gray-50">
                 Cancel
               </button>
               <button
-                onClick={handleConfirmAction}
-                disabled={confirmModal.actionType === "reject" && !rejectionReason.trim()}
-                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs disabled:opacity-50 ${CONFIRM_COPY[confirmModal.actionType]?.color}`}
+                onClick={runConfirmed}
+                disabled={busy || (confirm === "reject" && !rejectionReason.trim())}
+                className={`flex-1 rounded-xl px-4 py-2.5 text-xs font-semibold text-white shadow-xs disabled:opacity-50 ${CONFIRM_COPY[confirm].color}`}
               >
-                {CONFIRM_COPY[confirmModal.actionType]?.button}
+                {busy ? "Working..." : CONFIRM_COPY[confirm].button}
               </button>
             </div>
           </div>

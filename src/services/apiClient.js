@@ -13,11 +13,8 @@ export const API_BASE_URL = String(
 
 export const isApiConfigured = () => API_BASE_URL !== "";
 
-/**
- * Call the backend as the signed-in admin (Firebase ID token as Bearer).
- * Resolves to the JSON body; throws an Error with the backend's message.
- */
-export async function apiRequest(path, { method = "GET", body } = {}) {
+/** fetch() as the signed-in admin (Firebase ID token as Bearer). */
+async function authorizedFetch(path, { method = "GET", body } = {}) {
   if (!isApiConfigured()) {
     throw new Error("The backend URL is not configured. Set VITE_API_BASE_URL and rebuild the portal.");
   }
@@ -25,9 +22,8 @@ export async function apiRequest(path, { method = "GET", body } = {}) {
   if (!user) throw new Error("Your session has ended. Sign in again.");
 
   const token = await user.getIdToken();
-  let response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    return await fetch(`${API_BASE_URL}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -38,14 +34,30 @@ export async function apiRequest(path, { method = "GET", body } = {}) {
   } catch {
     throw new Error(`Could not reach the Blood-Connect backend at ${API_BASE_URL}. Check that it is running.`);
   }
+}
 
+async function errorFrom(response) {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.message || data.detail || `Request failed (${response.status}).`);
-    error.status = response.status;
-    error.code = data.code;
-    error.data = data;
-    throw error;
-  }
-  return data;
+  const error = new Error(data.message || data.detail || `Request failed (${response.status}).`);
+  error.status = response.status;
+  error.code = data.code;
+  error.data = data;
+  return error;
+}
+
+/**
+ * Call the backend as the signed-in admin.
+ * Resolves to the JSON body; throws an Error with the backend's message.
+ */
+export async function apiRequest(path, options) {
+  const response = await authorizedFetch(path, options);
+  if (!response.ok) throw await errorFrom(response);
+  return response.json().catch(() => ({}));
+}
+
+/** Like apiRequest, for endpoints that return a file. Resolves to a Blob. */
+export async function apiBlob(path) {
+  const response = await authorizedFetch(path);
+  if (!response.ok) throw await errorFrom(response);
+  return response.blob();
 }
