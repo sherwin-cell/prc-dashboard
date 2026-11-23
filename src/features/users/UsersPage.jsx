@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { SecureFileLink, SecureImage } from "../../components/common/SecureFile";
 import { LuArrowLeft, LuSearch, LuRefreshCw, LuTrash2, LuCheck } from "react-icons/lu";
 import {
   getUsers,
@@ -64,7 +65,7 @@ function PhotoComparison({ selfieUrl, selfieLabel, idUrl, loading }) {
         </figure>
         {idUrl && showId && (
           <figure>
-            <a href={idUrl} target="_blank" rel="noreferrer noopener"><img src={idUrl} alt="ID front" className="h-40 rounded-xl border object-contain bg-gray-50" referrerPolicy="no-referrer" /></a>
+            <SecureFileLink value={idUrl}><SecureImage value={idUrl} alt="ID front" className="h-40 w-40 rounded-xl border object-contain bg-gray-50" /></SecureFileLink>
             <figcaption className="text-xs text-gray-500 mt-1">ID front photo</figcaption>
           </figure>
         )}

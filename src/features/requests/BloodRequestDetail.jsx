@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SecureFileLink } from "../../components/common/SecureFile";
 import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan, LuBellRing } from "react-icons/lu";
@@ -295,19 +296,14 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
                     {reqData.brfFileName || "Blood Request Form.pdf"}
                   </span>
 
-                  <a
-                    href={reqData.brfFileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 w-fit px-3 py-1.5
+                  <SecureFileLink value={reqData.brfFileUrl} className="inline-flex items-center gap-2 w-fit px-3 py-1.5
                    bg-red-50 text-[#D32F2F]
                    border border-red-100
                    rounded-lg text-xs font-semibold
-                   hover:bg-red-100 transition"
-                  >
+                   hover:bg-red-100 transition">
                     <LuFileText size={15} />
                     View BRF PDF
-                  </a>
+                  </SecureFileLink>
                 </div>
               ) : (
                 <span className="text-gray-400">
@@ -352,24 +348,14 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
 
             <div className="flex gap-4 pt-2 border-t border-blue-100/60">
               {reqData.idVerification.frontIdImageUrl && (
-                <a
-                  href={reqData.idVerification.frontIdImageUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-[#D32F2F] font-semibold flex items-center gap-1 hover:underline"
-                >
+                <SecureFileLink value={reqData.idVerification.frontIdImageUrl} className="text-xs text-[#D32F2F] font-semibold flex items-center gap-1 hover:underline">
                   View Front ID
-                </a>
+                </SecureFileLink>
               )}
               {reqData.idVerification.backIdImageUrl && (
-                <a
-                  href={reqData.idVerification.backIdImageUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-[#D32F2F] font-semibold flex items-center gap-1 hover:underline"
-                >
+                <SecureFileLink value={reqData.idVerification.backIdImageUrl} className="text-xs text-[#D32F2F] font-semibold flex items-center gap-1 hover:underline">
                   View Back ID
-                </a>
+                </SecureFileLink>
               )}
             </div>
           </div>

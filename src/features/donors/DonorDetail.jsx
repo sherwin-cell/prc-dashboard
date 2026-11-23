@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import { SecureFileLink } from "../../components/common/SecureFile";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -342,23 +343,13 @@ export default function DonorDetail({
 
             {hasSavedId && front && back ? (
               <div className="mt-4 flex flex-wrap gap-3 border-t pt-4">
-                <a
-                  href={front}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700"
-                >
+                <SecureFileLink value={front} className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700">
                   View Front ID
-                </a>
+                </SecureFileLink>
 
-                <a
-                  href={back}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700"
-                >
+                <SecureFileLink value={back} className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700">
                   View Back ID
-                </a>
+                </SecureFileLink>
               </div>
             ) : (
               <p className="mt-4 border-t pt-4 text-sm text-gray-500">
@@ -506,25 +497,15 @@ export default function DonorDetail({
           {front || back ? (
             <div className="flex flex-wrap gap-3 rounded-xl bg-blue-50 p-4">
               {front && (
-                <a
-                  className="rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-blue-700"
-                  href={front}
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <SecureFileLink value={front} className="rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-blue-700">
                   View Front ID
-                </a>
+                </SecureFileLink>
               )}
 
               {back && (
-                <a
-                  className="rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-blue-700"
-                  href={back}
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <SecureFileLink value={back} className="rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-blue-700">
                   View Back ID
-                </a>
+                </SecureFileLink>
               )}
             </div>
           ) : (
