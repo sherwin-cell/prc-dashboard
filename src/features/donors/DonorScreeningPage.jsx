@@ -1,8 +1,7 @@
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertCircle,
-  CalendarCheck,
   CheckCircle2,
   ClipboardCheck,
   Droplets,
@@ -12,7 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 
-import { useAuth } from "../../context/AuthContext";
+import { useAuth } from "../../context/useAuth";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 
 import {

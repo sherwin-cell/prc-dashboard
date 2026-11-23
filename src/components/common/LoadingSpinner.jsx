@@ -1,4 +1,3 @@
-import React from "react";
 import { LuLoader } from "react-icons/lu";
 
 const LoadingSpinner = ({ message = "Loading..." }) => {

@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
-import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan } from "react-icons/lu";
-import { useAuth } from "../../context/AuthContext";
+import { LuShieldCheck, LuArrowLeft, LuFileText, LuBan, LuBellRing } from "react-icons/lu";
+import { useAuth } from "../../context/useAuth";
 import RequestOffersList from "../../components/admin/RequestOffersList";
 import {
   markRequestFulfilled,
@@ -13,6 +13,7 @@ import {
   isRequestOpen,
   requestStatusClasses,
   requestStatusLabel,
+  unitsNeededOf,
 } from "../../constants/statuses";
 
 const CONFIRM_COPY = {
@@ -25,6 +26,8 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
   const { currentUser } = useAuth();
   const [reqData, setReqData] = useState(request);
   const [actionError, setActionError] = useState("");
+  // Shown to the requester in the app (rejectionReason).
+  const [rejectionReason, setRejectionReason] = useState("");
 
   // Keep the request live so a cancellation from the mobile app shows up
   // immediately and PRC stops acting on it.
@@ -67,6 +70,11 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
       // A published (PRC-approved) blood request is "active"; the ID
       // verification submission keeps its own approved/rejected status.
       const newStatus = actionType === "approve" ? "active" : "rejected";
+      const reason = rejectionReason.trim();
+      if (actionType === "reject" && !reason) {
+        setActionError("Enter a reason for the requester before rejecting.");
+        return;
+      }
       const idVerificationStatus = actionType === "approve" ? "approved" : "rejected";
       const submissionId = reqData.idVerificationSubmissionId;
 
@@ -75,11 +83,17 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
 
       batch.update(requestRef, {
         status: newStatus,
+        // The backend times the approval/rejection notice from reviewedAt.
+        reviewedAt: serverTimestamp(),
+        reviewedBy: currentUser?.uid || "admin",
+        // The app shows this on the rejected request (RequestProgress).
+        ...(actionType === "reject" ? { rejectionReason: reason } : {}),
         updatedAt: serverTimestamp(),
       });
 
       // Anonymized summary shown to donors (no patient identity, requester
-      // contact details or Blood Request Form). Only for published requests.
+      // contact details or Blood Request Form). Donors cannot read
+      // blood_requests, so this is all they see. Only for published requests.
       if (actionType === "approve") {
         batch.set(doc(db, "request_summaries", reqData.id), {
           requestId: reqData.id,
@@ -87,6 +101,8 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
           component: reqData.component ?? null,
           unitsRequired: reqData.unitsRequired ?? null,
           urgency: reqData.urgency ?? null,
+          // The hospital is shown to donors; the patient stays anonymous.
+          hospitalName: reqData.hospitalName ?? null,
           neededByDate:
             reqData.neededByDate ?? reqData.neededBy ?? reqData.requiredDate ?? null,
           status: "active",
@@ -105,10 +121,15 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
 
       await batch.commit();
 
-      const updated = { ...reqData, status: newStatus };
+      const updated = {
+        ...reqData,
+        status: newStatus,
+        ...(actionType === "reject" ? { rejectionReason: reason } : {}),
+      };
       setReqData(updated);
       if (onUpdateStatus) onUpdateStatus(updated);
 
+      setRejectionReason("");
       setConfirmModal({ isOpen: false, actionType: null });
     } catch (error) {
       console.error(`Error ${actionType}ing request:`, error);
@@ -389,10 +410,43 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
           )}
         </div>
 
+        {reqData.status === RequestStatus.rejected && (reqData.rejectionReason || reqData.adminNotes) && (
+          <div className="p-3.5 rounded-xl border border-rose-100 bg-rose-50/60 text-xs text-rose-900">
+            <span className="font-bold">Reason shown to the requester:</span> {reqData.rejectionReason || reqData.adminNotes}
+          </div>
+        )}
+
+        {/* Donors alerted on approval: written by blood_connect_backend
+            (notification worker) as matchingDonorsNotified; only a count. */}
+        {reqData.status && reqData.status !== RequestStatus.pending && reqData.status !== RequestStatus.rejected && (
+          <div className="flex items-start gap-2.5 p-3.5 rounded-xl border border-blue-100 bg-blue-50/60 text-xs">
+            <LuBellRing size={16} className="text-blue-600 shrink-0 mt-0.5" />
+            {typeof reqData.matchingDonorsNotified === "number" ? (
+              reqData.matchingDonorsNotified > 0 ? (
+                <p className="text-blue-900">
+                  <span className="font-black tabular-nums">{reqData.matchingDonorsNotified}</span>{" "}
+                  matching donor{reqData.matchingDonorsNotified === 1 ? "" : "s"} alerted when this request was approved.
+                </p>
+              ) : (
+                <p className="text-blue-900">
+                  <span className="font-bold">No matching donors were alerted.</span> Either the requester has no
+                  municipality or province on their profile, or no available {reqData.bloodType || ""} donors live nearby.
+                  The request is still listed for donors in the app.
+                </p>
+              )
+            ) : (
+              <p className="text-blue-900">
+                Donor alerts not recorded yet. The backend notification worker records the count shortly after
+                approval; if this stays empty, check that the backend is running.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Donor offers (only once PRC has reviewed the request) */}
         {reqData.status && reqData.status !== RequestStatus.pending && reqData.status !== RequestStatus.rejected && (
           <div className="border-t border-gray-100 pt-4">
-            <RequestOffersList requestId={reqData.id} requestStatus={reqData.status} />
+            <RequestOffersList requestId={reqData.id} requestStatus={reqData.status} unitsNeeded={unitsNeededOf(reqData)} />
           </div>
         )}
       </div>
@@ -408,6 +462,25 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
               Are you sure you want to <span className="font-semibold">{CONFIRM_COPY[confirmModal.actionType]?.verb}</span> the blood request for{" "}
               <span className="font-semibold text-gray-900">{reqData.patientName}</span>?
             </p>
+            {confirmModal.actionType === "reject" && (
+              <label className="block text-xs font-semibold text-gray-700">
+                Reason shown to the requester
+                <textarea
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  rows={3}
+                  maxLength={500}
+                  placeholder="e.g. The Blood Request Form is unreadable. Please submit a new request with a clear photo."
+                  className="mt-1 w-full rounded-xl border border-gray-300 p-2.5 text-xs font-normal text-gray-800 focus:outline-none focus:border-rose-500"
+                />
+              </label>
+            )}
+            {confirmModal.actionType === "fulfill" && (
+              <p className="text-xs text-gray-500">
+                Offers still waiting for PRC are declined automatically and those donors are told they were not
+                needed. Confirmed donors stay, so you can still record their donations.
+              </p>
+            )}
             <div className="flex gap-3 pt-4">
               <button
                 onClick={() => setConfirmModal({ isOpen: false, actionType: null })}
@@ -417,7 +490,8 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
               </button>
               <button
                 onClick={handleConfirmAction}
-                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs ${CONFIRM_COPY[confirmModal.actionType]?.color}`}
+                disabled={confirmModal.actionType === "reject" && !rejectionReason.trim()}
+                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs disabled:opacity-50 ${CONFIRM_COPY[confirmModal.actionType]?.color}`}
               >
                 {CONFIRM_COPY[confirmModal.actionType]?.button}
               </button>
@@ -429,4 +503,4 @@ const BloodRequestDetail = ({ request, onBack, onUpdateStatus }) => {
   );
 };
 
-export default BloodRequestDetail;
+export default BloodRequestDetail;

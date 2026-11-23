@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   signInWithEmailAndPassword,
   signOut,
@@ -6,17 +6,46 @@ import {
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../firebase/config";
+import { AuthContext } from "./useAuth";
 
-const AuthContext = createContext(null);
+const accessDenied = (message) => {
+  const error = new Error(message);
+  error.code = "ACCESS_DENIED";
+  return error;
+};
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
+/**
+ * The admin profile for a signed-in Firebase user, or throws ACCESS_DENIED.
+ *
+ * Same test as isAdmin() in firestore.rules: the `admin` custom claim, or
+ * users/{uid}.role == "admin". An account with only the claim may have no
+ * users document, so its profile is built from the Auth account.
+ */
+const verifyAdmin = async (user) => {
+  if (!user) return null;
 
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
+  const [tokenResult, userSnap] = await Promise.all([
+    user.getIdTokenResult(),
+    getDoc(doc(db, "users", user.uid)),
+  ]);
+  const userData = userSnap.exists() ? userSnap.data() : null;
+  const hasAdminClaim = tokenResult.claims.admin === true;
+
+  if (hasAdminClaim || userData?.role === "admin") {
+    return {
+      fullName: user.displayName || user.email || "PRC Admin",
+      email: user.email,
+      ...(userData || {}),
+      role: "admin",
+      adminVia: hasAdminClaim ? "claim" : "role",
+    };
   }
 
-  return context;
+  throw accessDenied(
+    userData
+      ? "User is not authorized as an administrator."
+      : "Admin profile not found in Firestore."
+  );
 };
 
 export const AuthProvider = ({ children }) => {
@@ -24,79 +53,23 @@ export const AuthProvider = ({ children }) => {
   const [adminProfile, setAdminProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  /**
-   * Verify that a Firebase user has an admin profile
-   * in Firestore.
-   */
-  const verifyAdmin = async (user) => {
-    if (!user) {
-      return null;
-    }
-
-    const userDocRef = doc(db, "users", user.uid);
-    const userSnap = await getDoc(userDocRef);
-
-    if (!userSnap.exists()) {
-      const error = new Error(
-        "Admin profile not found in Firestore."
-      );
-      error.code = "ACCESS_DENIED";
-      throw error;
-    }
-
-    const userData = userSnap.data();
-
-    if (userData?.role !== "admin") {
-      const error = new Error(
-        "User is not authorized as an administrator."
-      );
-      error.code = "ACCESS_DENIED";
-      throw error;
-    }
-
-    return userData;
-  };
-
-  /**
-   * Login
-   */
   const login = async (email, password) => {
     try {
-      const result = await signInWithEmailAndPassword(
-        auth,
-        email.trim(),
-        password
-      );
+      const result = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const userData = await verifyAdmin(result.user);
 
-      const user = result.user;
-
-      console.log("========== ADMIN LOGIN ==========");
-      console.log("Email:", user.email);
-      console.log("UID:", user.uid);
-
-      const userData = await verifyAdmin(user);
-
-      setCurrentUser(user);
+      setCurrentUser(result.user);
       setAdminProfile(userData);
-
-      console.log("Admin profile:", userData);
-      console.log("ADMIN LOGIN SUCCESS");
-      console.log("================================");
-
       return result;
     } catch (error) {
       console.error("Admin login failed:", error);
 
-      // If the Firebase account is not authorized,
-      // make sure it is signed out.
+      // A signed-in account that is not an admin is signed out again.
       if (error.code === "ACCESS_DENIED") {
         try {
           await signOut(auth);
         } catch (signOutError) {
-          console.error(
-            "Failed to sign out unauthorized user:",
-            signOutError
-          );
+          console.error("Failed to sign out unauthorized user:", signOutError);
         }
 
         setCurrentUser(null);
@@ -107,29 +80,13 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  /**
-   * Logout
-   */
   const logout = async () => {
-    try {
-      await signOut(auth);
-
-      setCurrentUser(null);
-      setAdminProfile(null);
-
-      console.log("Admin logged out.");
-    } catch (error) {
-      console.error("Logout failed:", error);
-      throw error;
-    }
+    await signOut(auth);
+    setCurrentUser(null);
+    setAdminProfile(null);
   };
 
-  /**
-   * Monitor Firebase authentication state.
-   *
-   * This also verifies the Firestore admin role whenever
-   * the application starts or Firebase restores a session.
-   */
+  // Re-check admin access whenever the app starts or Firebase restores a session.
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
@@ -140,34 +97,18 @@ export const AuthProvider = ({ children }) => {
       }
 
       try {
-        console.log("========== AUTH STATE ==========");
-        console.log("Email:", user.email);
-        console.log("UID:", user.uid);
-
         const userData = await verifyAdmin(user);
-
         setCurrentUser(user);
         setAdminProfile(userData);
-
-        console.log("Authorized admin detected.");
-        console.log("Role:", userData?.role);
-        console.log("================================");
       } catch (error) {
-        console.error(
-          "Admin authorization failed:",
-          error
-        );
-
+        console.error("Admin authorization failed:", error);
         setCurrentUser(null);
         setAdminProfile(null);
 
         try {
           await signOut(auth);
         } catch (signOutError) {
-          console.error(
-            "Failed to sign out unauthorized user:",
-            signOutError
-          );
+          console.error("Failed to sign out unauthorized user:", signOutError);
         }
       } finally {
         setLoading(false);
@@ -185,11 +126,5 @@ export const AuthProvider = ({ children }) => {
     loading,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
-
-export default AuthContext;

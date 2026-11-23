@@ -1,49 +1,72 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "../firebase/config";
-import { collection, query, where, getDocs, doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, getDocs } from "firebase/firestore";
 import { LuArchive, LuRotateCcw, LuCheck } from "react-icons/lu";
+import { useAuth } from "../context/useAuth";
+import { restoreRequest } from "../services/firestore/requestService";
+import {
+  RequestStatus,
+  requestStatusClasses,
+  requestStatusLabel,
+} from "../constants/statuses";
+
+const isLegacyArchive = (req) =>
+  String(req.status || "").trim().toLowerCase() === RequestStatus.archived;
 
 const ArchivedRequests = () => {
+  const { currentUser } = useAuth();
   const [archivedList, setArchivedList] = useState([]);
+  const [actionError, setActionError] = useState("");
+  const [busyId, setBusyId] = useState("");
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState({ show: false, message: "" });
 
-  // Fetch only archived blood requests
-  const fetchArchivedRequests = async () => {
-    try {
-      setLoading(true);
-      const q = query(collection(db, "blood_requests"), where("status", "==", "archived"));
-      const querySnapshot = await getDocs(q);
-      const data = querySnapshot.docs.map((docItem) => ({
-        id: docItem.id,
-        ...docItem.data(),
-      }));
-      setArchivedList(data);
-    } catch (error) {
-      console.error("Error fetching archived requests:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Current archives use the admin-only flag; older ones overwrote the status.
   useEffect(() => {
+    async function fetchArchivedRequests() {
+      try {
+        const requests = collection(db, "blood_requests");
+        const [flagged, legacy] = await Promise.all([
+          getDocs(query(requests, where("archived", "==", true))),
+          getDocs(query(requests, where("status", "==", RequestStatus.archived))),
+        ]);
+        const byId = new Map();
+        [...flagged.docs, ...legacy.docs].forEach((docItem) =>
+          byId.set(docItem.id, { id: docItem.id, ...docItem.data() })
+        );
+        setArchivedList([...byId.values()]);
+      } catch (error) {
+        console.error("Error fetching archived requests:", error);
+        setActionError("Could not load archived requests. Refresh to try again.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
     fetchArchivedRequests();
   }, []);
 
-  // Restore/Unarchive action back to pending
+  // Clears the archive flag; legacy archives get their real status back.
   const handleRestore = async (req) => {
-    try {
-      const ref = doc(db, "blood_requests", req.id);
-      await updateDoc(ref, { status: "pending", updatedAt: serverTimestamp() });
-      
-      // Remove from archive list state
-      setArchivedList((prev) => prev.filter((item) => item.id !== req.id));
+    setBusyId(req.id);
+    setActionError("");
+    const result = await restoreRequest(req.id, currentUser);
+    setBusyId("");
 
-      setBanner({ show: true, message: `Successfully restored request for ${req.patientName || "Patient"}!` });
-      setTimeout(() => setBanner({ show: false, message: "" }), 4000);
-    } catch (err) {
-      console.error("Error restoring request:", err);
+    if (!result.success) {
+      setActionError(result.error || "Could not restore the request.");
+      return;
     }
+
+    setArchivedList((prev) => prev.filter((item) => item.id !== req.id));
+    const name = req.patientName || "this patient";
+    setBanner({
+      show: true,
+      message: result.restoredStatus
+        ? `Restored the request for ${name} as "${requestStatusLabel(result.restoredStatus)}".`
+        : `Restored the request for ${name}.`,
+    });
+    setTimeout(() => setBanner({ show: false, message: "" }), 4000);
   };
 
   if (loading) {
@@ -57,6 +80,12 @@ const ArchivedRequests = () => {
         <div className="flex items-center gap-2.5 p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl text-xs font-semibold shadow-xs">
           <LuCheck size={18} className="text-emerald-600 shrink-0" />
           <span>{banner.message}</span>
+        </div>
+      )}
+
+      {actionError && (
+        <div role="alert" className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-semibold">
+          {actionError}
         </div>
       )}
 
@@ -96,21 +125,31 @@ const ArchivedRequests = () => {
                   <td className="px-6 py-4 text-sm font-medium text-gray-900">{req.patientName || "Unnamed"}</td>
                   <td className="px-6 py-4 text-sm">
                     <span className="px-2.5 py-1 bg-red-50 text-[#D32F2F] text-xs font-bold rounded-full border border-red-100">
-                      {req.bloodType || "O+"}
+                      {req.bloodType || "—"}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{req.hospital || "N/A"}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{req.hospitalName || req.hospital || "N/A"}</td>
                   <td className="px-6 py-4 text-sm">
-                    <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase bg-gray-100 text-gray-700">
-                      Archived
-                    </span>
+                    {isLegacyArchive(req) ? (
+                      <span
+                        title="Archived by an older admin version, which overwrote the status. Restoring brings back the status donors last saw."
+                        className="text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase bg-gray-100 text-gray-700"
+                      >
+                        Archived (legacy)
+                      </span>
+                    ) : (
+                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${requestStatusClasses(req.status)}`}>
+                        {requestStatusLabel(req.status)}
+                      </span>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-right text-sm">
                     <button
                       onClick={() => handleRestore(req)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold rounded-xl transition-colors"
+                      disabled={!!busyId}
+                      className="disabled:opacity-50 inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold rounded-xl transition-colors"
                     >
-                      <LuRotateCcw size={14} /> Restore
+                      <LuRotateCcw size={14} /> {busyId === req.id ? "Restoring..." : "Restore"}
                     </button>
                   </td>
                 </tr>

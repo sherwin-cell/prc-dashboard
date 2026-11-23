@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "../context/useAuth";
 import {
   LuLayoutDashboard,
   LuUsers,
@@ -14,6 +14,7 @@ import {
   LuChevronDown,
   LuChevronUp,
   LuArchive,
+  // eslint-disable-next-line no-unused-vars -- deferred Announcements menu (commented out)
   LuEye,
   LuCalendarClock,
   LuClipboardCheck,
@@ -34,6 +35,8 @@ const AdminLayout = () => {
   const [isDonorsOpen, setIsDonorsOpen] = useState(isDonorsPath);
 
   const isAnnouncementsPath = location.pathname.startsWith("/announcements");
+  // Used by the Announcements menu, which is deferred (commented out below).
+  // eslint-disable-next-line no-unused-vars
   const [isAnnouncementsOpen, setIsAnnouncementsOpen] = useState(isAnnouncementsPath);
 
   const handleLogout = async () => {
@@ -284,6 +287,26 @@ const AdminLayout = () => {
             >
               <LuMessageSquare size={18} className="shrink-0" />
               {!isSidebarCollapsed && <span className="truncate">Support Chats</span>}
+            </NavLink>
+
+            {/* Announcements: under development (Item 14) */}
+            <NavLink
+              to="/announcements"
+              title="Announcements (under development)"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${isActive || isAnnouncementsPath ? "bg-red-50 text-[#D32F2F] font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                } ${isSidebarCollapsed ? "justify-center" : ""}`
+              }
+            >
+              <LuMegaphone size={18} className="shrink-0" />
+              {!isSidebarCollapsed && (
+                <>
+                  <span className="truncate">Announcements</span>
+                  <span className="ml-auto bg-amber-100 text-amber-800 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded">
+                    Soon
+                  </span>
+                </>
+              )}
             </NavLink>
 
             {/* Announcements Accordion Menu */}

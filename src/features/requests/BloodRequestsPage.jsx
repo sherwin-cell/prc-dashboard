@@ -1,23 +1,37 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
-import { collection, getDocs, query, orderBy, doc, deleteDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, getDocs, query, orderBy } from "firebase/firestore";
 import { LuSearch, LuFilter, LuEye, LuArchive, LuTrash2, LuCheck } from "react-icons/lu";
-import { RequestStatus, requestStatusClasses, requestStatusLabel } from "../../constants/statuses";
+import {
+  RequestStatus,
+  canArchiveRequest,
+  isRequestArchived,
+  requestStatusClasses,
+  requestStatusLabel,
+} from "../../constants/statuses";
+import { archiveRequest, deleteRequest } from "../../services/firestore/requestService";
+import { useAuth } from "../../context/useAuth";
+
+const FINISH_FIRST =
+  "Only finished requests (fulfilled, cancelled, rejected or expired) can be archived or deleted.";
 
 const BloodRequestsPage = ({ onViewDetail }) => {
+  const { currentUser } = useAuth();
   const [requests, setRequests] = useState([]);
+  const [actionError, setActionError] = useState("");
+  const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState("patientName");
   const [selectedBloodType, setSelectedBloodType] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
-  
+
   const [banner, setBanner] = useState({ show: false, message: "" });
 
   const [confirmModal, setConfirmModal] = useState({
     isOpen: false,
-    actionType: null, 
+    actionType: null,
     requestItem: null,
   });
 
@@ -48,24 +62,30 @@ const BloodRequestsPage = ({ onViewDetail }) => {
     const { actionType, requestItem } = confirmModal;
     if (!actionType || !requestItem) return;
 
-    try {
-      if (actionType === "archive") {
-        const ref = doc(db, "blood_requests", requestItem.id);
-        await updateDoc(ref, { status: "archived", updatedAt: serverTimestamp() });
-        
-        setRequests((prev) => prev.filter((r) => r.id !== requestItem.id));
-        setBanner({ show: true, message: `Successfully archived request for ${requestItem.patientName || "Patient"}!` });
-      } else if (actionType === "delete") {
-        await deleteDoc(doc(db, "blood_requests", requestItem.id));
-        setRequests((prev) => prev.filter((r) => r.id !== requestItem.id));
-        setBanner({ show: true, message: "Successfully deleted blood request record." });
-      }
+    setBusy(true);
+    setActionError("");
+    // Both re-check the status in Firestore and keep request_summaries consistent.
+    const result =
+      actionType === "archive"
+        ? await archiveRequest(requestItem.id, currentUser)
+        : await deleteRequest(requestItem.id, currentUser);
+    setBusy(false);
+    setConfirmModal({ isOpen: false, actionType: null, requestItem: null });
 
-      setTimeout(() => setBanner({ show: false, message: "" }), 4000);
-      setConfirmModal({ isOpen: false, actionType: null, requestItem: null });
-    } catch (err) {
-      console.error(`Error during ${actionType}:`, err);
+    if (!result.success) {
+      setActionError(result.error || `Could not ${actionType} the request.`);
+      return;
     }
+
+    setRequests((prev) => prev.filter((r) => r.id !== requestItem.id));
+    setBanner({
+      show: true,
+      message:
+        actionType === "archive"
+          ? `Archived the request for ${requestItem.patientName || "this patient"}.`
+          : "Deleted the request, its donor offers and its donor-facing summary.",
+    });
+    setTimeout(() => setBanner({ show: false, message: "" }), 4000);
   };
 
   const filteredRequests = requests.filter((req) => {
@@ -75,7 +95,7 @@ const BloodRequestsPage = ({ onViewDetail }) => {
     const status = (req.status || "pending").toLowerCase();
     const queryText = searchQuery.toLowerCase();
 
-    if (status === "archived") return false;
+    if (isRequestArchived(req)) return false;
 
     // "approved" and the legacy "active" both mean open to donors.
     const openAliases = [RequestStatus.approved, RequestStatus.active];
@@ -103,6 +123,13 @@ const BloodRequestsPage = ({ onViewDetail }) => {
         <div className="flex items-center gap-2.5 p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl text-xs font-semibold shadow-xs transition-all">
           <LuCheck size={18} className="text-emerald-600 shrink-0" />
           <span>{banner.message}</span>
+        </div>
+      )}
+
+      {actionError && (
+        <div role="alert" className="flex items-center justify-between gap-3 p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-semibold">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError("")} className="text-rose-500 hover:text-rose-700 font-bold">Dismiss</button>
         </div>
       )}
 
@@ -195,7 +222,7 @@ const BloodRequestsPage = ({ onViewDetail }) => {
                   <td className="px-6 py-4 text-sm font-medium text-gray-900">{req.patientName || "Unnamed"}</td>
                   <td className="px-6 py-4 text-sm">
                     <span className="px-2.5 py-1 bg-red-50 text-[#D32F2F] text-xs font-bold rounded-full border border-red-100">
-                      {req.bloodType || "O+"}
+                      {req.bloodType || "—"}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">{req.component || "Whole Blood"}</td>
@@ -210,23 +237,25 @@ const BloodRequestsPage = ({ onViewDetail }) => {
                       <button onClick={(e) => { e.stopPropagation(); onViewDetail(req); }} className="p-1.5 hover:text-blue-600 rounded-lg">
                         <LuEye size={17} />
                       </button>
-                      <button 
-                        title="Archive Request" 
+                      <button
+                        title={canArchiveRequest(req.status) ? "Archive Request" : FINISH_FIRST}
+                        disabled={!canArchiveRequest(req.status)}
                         onClick={(e) => {
                           e.stopPropagation();
                           setConfirmModal({ isOpen: true, actionType: "archive", requestItem: req });
-                        }} 
-                        className="p-1.5 hover:text-amber-600 rounded-lg"
+                        }}
+                        className="p-1.5 hover:text-amber-600 rounded-lg disabled:opacity-30 disabled:hover:text-gray-400 disabled:cursor-not-allowed"
                       >
                         <LuArchive size={17} />
                       </button>
-                      <button 
-                        title="Delete Request" 
+                      <button
+                        title={canArchiveRequest(req.status) ? "Delete Request" : FINISH_FIRST}
+                        disabled={!canArchiveRequest(req.status)}
                         onClick={(e) => {
                           e.stopPropagation();
                           setConfirmModal({ isOpen: true, actionType: "delete", requestItem: req });
-                        }} 
-                        className="p-1.5 hover:text-rose-600 rounded-lg"
+                        }}
+                        className="p-1.5 hover:text-rose-600 rounded-lg disabled:opacity-30 disabled:hover:text-gray-400 disabled:cursor-not-allowed"
                       >
                         <LuTrash2 size={17} />
                       </button>
@@ -249,6 +278,11 @@ const BloodRequestsPage = ({ onViewDetail }) => {
               Are you sure you want to <span className="font-semibold">{confirmModal.actionType}</span> the blood request for{" "}
               <span className="font-semibold text-gray-900">{confirmModal.requestItem?.patientName || "this patient"}</span>?
             </p>
+            <p className="text-xs text-gray-500">
+              {confirmModal.actionType === "delete"
+                ? "This permanently removes the request, its donor offers and its donor-facing summary. It cannot be undone."
+                : "The requester keeps seeing its final status in the app. You can restore it from Archived Requests."}
+            </p>
             <div className="flex gap-3 pt-4">
               <button
                 onClick={() => setConfirmModal({ isOpen: false, actionType: null, requestItem: null })}
@@ -258,13 +292,14 @@ const BloodRequestsPage = ({ onViewDetail }) => {
               </button>
               <button
                 onClick={handleConfirmAction}
-                className={`flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs ${
+                disabled={busy}
+                className={`disabled:opacity-60 flex-1 px-4 py-2.5 text-xs font-semibold text-white rounded-xl transition-colors shadow-xs ${
                   confirmModal.actionType === "delete"
                     ? "bg-rose-600 hover:bg-rose-700"
                     : "bg-amber-600 hover:bg-amber-700"
                 }`}
               >
-                Yes, {confirmModal.actionType}
+                {busy ? "Working..." : `Yes, ${confirmModal.actionType}`}
               </button>
             </div>
           </div>

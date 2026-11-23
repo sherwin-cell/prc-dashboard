@@ -18,7 +18,10 @@ export const RequestStatus = {
   cancelled: "cancelled", // withdrawn by the requester
   rejected: "rejected",
   expired: "expired",
-  archived: "archived", // admin-only, hidden from the active list
+  // Legacy only: older admin builds overwrote status with "archived", which
+  // the mobile app and backend do not know. Archiving now sets the admin-only
+  // `archived: true` flag and keeps the real status. Never write this value.
+  archived: "archived",
 };
 
 const REQUEST_OPEN = [RequestStatus.approved, RequestStatus.active, RequestStatus.matched];
@@ -35,6 +38,23 @@ export const isRequestOpen = (status) => REQUEST_OPEN.includes(norm(status));
 
 /** No further PRC action makes sense on this request. */
 export const isRequestClosed = (status) => REQUEST_CLOSED.includes(norm(status));
+
+/**
+ * Finished requests PRC may archive or delete. Their request_summaries entry
+ * is already closed (fulfilled/cancelled/expired) or never existed (rejected),
+ * so donors no longer see them.
+ */
+const REQUEST_ARCHIVABLE = [
+  RequestStatus.fulfilled,
+  RequestStatus.cancelled,
+  RequestStatus.rejected,
+  RequestStatus.expired,
+];
+export const canArchiveRequest = (status) => REQUEST_ARCHIVABLE.includes(norm(status));
+
+/** Hidden from the active list: the admin-only flag, or the legacy status value. */
+export const isRequestArchived = (request) =>
+  request?.archived === true || norm(request?.status) === RequestStatus.archived;
 
 export const requestStatusLabel = (status) => {
   switch (norm(status)) {
@@ -98,6 +118,17 @@ export const isOfferConfirmed = (status) =>
 
 export const isOfferPending = (status) => norm(status || OfferStatus.pending) === OfferStatus.pending;
 
+/**
+ * Offers that cover a unit of the request: PRC confirmed (approved / legacy
+ * accepted) or already donated. Same as OfferStatus.isConfirmed in the app.
+ */
+export const countsTowardMatch = (status) =>
+  isOfferConfirmed(status) || norm(status) === OfferStatus.donated;
+
+/** Units the request needs; each confirmed donor covers one unit. */
+export const unitsNeededOf = (request) =>
+  Math.max(1, Number(request?.unitsRequired ?? request?.unitsNeeded ?? 1) || 1);
+
 export const offerStatusLabel = (status) => {
   switch (norm(status)) {
     case "":
@@ -132,3 +163,84 @@ export const offerStatusClasses = (status) => {
       return "bg-amber-100 text-amber-800";
   }
 };
+
+// users/{uid}.faceVerification.result
+// verified / failed: written by blood_connect_backend (automatic face match).
+// approved_by_admin / rejected_by_admin: written by PRC here.
+// Keep in sync with FaceVerificationResult in statuses.dart.
+export const FaceVerificationResult = {
+  verified: "verified",
+  failed: "failed",
+  approvedByAdmin: "approved_by_admin",
+  rejectedByAdmin: "rejected_by_admin",
+};
+
+/**
+ * Where a user stands on identity verification:
+ * "verified" | "needs_review" (automatic match failed) | "rejected" | "not_started".
+ */
+export const faceReviewState = (user) => {
+  const result = norm(user?.faceVerification?.result);
+  if (user?.faceVerified === true) return "verified";
+  if (result === FaceVerificationResult.rejectedByAdmin) return "rejected";
+  if (result === FaceVerificationResult.failed) return "needs_review";
+  return "not_started";
+};
+
+export const faceReviewLabel = (state) =>
+  ({
+    verified: "Verified",
+    needs_review: "Needs review",
+    rejected: "Rejected by PRC",
+    not_started: "Not verified",
+  })[state] || "Not verified";
+
+export const faceReviewClasses = (state) =>
+  ({
+    verified: "bg-emerald-100 text-emerald-800",
+    needs_review: "bg-amber-100 text-amber-800",
+    rejected: "bg-rose-100 text-rose-800",
+  })[state] || "bg-gray-100 text-gray-700";
+
+// face_verification_attempts/{id}.outcome (blood_connect_backend Code values)
+export const faceAttemptLabel = (outcome) =>
+  ({
+    verified: "Matched",
+    not_matched: "Did not match",
+    already_verified: "Already verified",
+    id_required: "No ID on file",
+    invalid_id_image_url: "ID image not on PRC Cloudinary",
+    invalid_selfie: "Invalid selfie",
+    selfie_too_large: "Selfie too large",
+    not_configured: "Server not configured",
+    attempt_limit: "Daily limit reached",
+    id_image_unavailable: "ID image unavailable",
+    no_face_in_selfie: "No face in selfie",
+    no_face_in_id: "No face on ID",
+    matcher_unavailable: "Matcher unavailable",
+    upload_failed: "Selfie upload failed",
+  })[norm(outcome)] || outcome || "Unknown";
+
+// donors/{uid} application status: applicationStatus, then donorStatus,
+// then status (the same precedence as the backend). The app knows pending /
+// approved / rejected only (DonorStatus in statuses.dart).
+export const donorApplicationStatus = (donor) =>
+  norm(donor?.applicationStatus || donor?.donorStatus || donor?.status || "pending");
+
+/**
+ * Archived donor applications are hidden from PRC's lists. Current archives
+ * use the admin-only `archived: true` flag and keep the real status; older
+ * admin builds overwrote the status fields with "archived" (legacy).
+ */
+export const isDonorLegacyArchived = (donor) =>
+  [donor?.applicationStatus, donor?.donorStatus, donor?.status].some((v) => norm(v) === "archived");
+
+export const isDonorArchived = (donor) => donor?.archived === true || isDonorLegacyArchived(donor);
+
+/**
+ * Only rejected applications may be archived or deleted: the donor already
+ * sees the decision (and PRC's reason) in the app. Pending applications must
+ * be reviewed first, and approved donors are managed through availability.
+ */
+export const canArchiveDonor = (donor) =>
+  donor?.donorActivationStatus !== "active" && donorApplicationStatus(donor) === "rejected";

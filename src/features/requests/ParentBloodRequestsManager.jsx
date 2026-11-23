@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import BloodRequestsPage from "./BloodRequestsPage";
 import BloodRequestDetail from "./BloodRequestDetail";
 
