@@ -103,7 +103,9 @@ export const shortId = (id) => `#${String(id || "").slice(0, 6).toUpperCase()}`;
 export function matchesSearch(request, text, requesterName = "") {
   const wanted = norm(text).replace(/^#/, "");
   if (!wanted) return true;
-  return [request?.patientName, requesterName, request?.hospitalName, request?.hospital, request?.id]
+  // matchedDonorCodes: anonymised codes of confirmed donors (DNR-0023).
+  const donorCodes = Array.isArray(request?.matchedDonorCodes) ? request.matchedDonorCodes : [];
+  return [request?.patientName, requesterName, request?.hospitalName, request?.hospital, request?.id, ...donorCodes]
     .some((value) => norm(value).includes(wanted));
 }
 

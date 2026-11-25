@@ -1,4 +1,5 @@
 import {
+  arrayUnion,
   collection,
   onSnapshot,
   doc,
@@ -123,6 +124,26 @@ export async function markRequestFulfilled(requestId, adminUser) {
 }
 
 /**
+ * Anonymised donor codes: DNR-0001, DNR-0002, ... one per confirmed offer
+ * (never per donor, so a donor cannot be linked across requests). The
+ * requester's app shows only this code; PRC searches it on the Blood
+ * Requests page via blood_requests/{id}.matchedDonorCodes.
+ *
+ * counters/donorCodes {last} is shared with blood_connect_backend
+ * (notifications/donor_code.py), which assigns codes to offers confirmed
+ * without one.
+ */
+const DONOR_CODE_COUNTER = ['counters', 'donorCodes'];
+
+export const formatDonorCode = (number) => `DNR-${String(number).padStart(4, '0')}`;
+
+export function nextDonorCode(counter) {
+  const last = Number(counter?.last);
+  const number = (Number.isFinite(last) ? Math.trunc(last) : 0) + 1;
+  return { number, code: formatDonorCode(number) };
+}
+
+/**
  * PRC handles a donor offer:
  *   pending            → approved (Confirm Match) | rejected (Decline)
  *   approved/accepted  → donated
@@ -160,6 +181,16 @@ export async function updateOfferStatus(requestId, offerId, newStatus, adminUser
         userSnap = await tx.get(userRef);
       }
 
+      // Confirming a donor gives the offer its anonymised code (the only
+      // donor detail the requester sees); see nextDonorCode below.
+      let counterRef = null;
+      let donorCode = null;
+      if (newStatus === OfferStatus.approved && !offerSnap.data().donorCode) {
+        counterRef = doc(db, DONOR_CODE_COUNTER[0], DONOR_CODE_COUNTER[1]);
+        const counterSnap = await tx.get(counterRef);
+        donorCode = nextDonorCode(counterSnap.exists() ? counterSnap.data() : null);
+      }
+
       const allowed =
         newStatus === OfferStatus.rejected
           ? isOfferPending(offerStatus)
@@ -182,6 +213,13 @@ export async function updateOfferStatus(requestId, offerId, newStatus, adminUser
       if (newStatus === OfferStatus.approved) Object.assign(update, { approvedAt: serverTimestamp(), approvedBy: uid });
       if (newStatus === OfferStatus.rejected) Object.assign(update, { rejectedAt: serverTimestamp(), rejectedBy: uid });
       if (newStatus === OfferStatus.donated) Object.assign(update, { donatedAt: serverTimestamp(), donatedBy: uid });
+
+      if (donorCode) {
+        update.donorCode = donorCode.code;
+        tx.set(counterRef, { last: donorCode.number, updatedAt: serverTimestamp() }, { merge: true });
+        // Lets PRC find the request from a DNR code in the request search.
+        tx.update(requestRef, { matchedDonorCodes: arrayUnion(donorCode.code) });
+      }
 
       tx.update(offerRef, update);
 

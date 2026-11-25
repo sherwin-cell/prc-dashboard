@@ -1,13 +1,14 @@
 // chats/{chatId} kinds. Keep in sync with blood_connect_backend
-// (notifications/match_chat.py) and the mobile chat screens.
+// (notifications/worker.py) and the mobile chat screens.
 
 /** Placeholder participant for PRC in support chats; not a real user. */
 export const PRC_SUPPORT_ID = "prc_support_admin";
 
 /**
- * Requester–donor chat the backend opens when PRC confirms an offer:
- * chats/match_{requestId}_{offerId}, type "donor_match".
- * These are between the two users; PRC only reads them.
+ * Retired requester–donor chat: chats/match_{requestId}_{offerId}, type
+ * "donor_match". No longer created (donors stay anonymous to requesters);
+ * firestore.rules block the users from reading or writing old ones, and
+ * PRC can only read them.
  */
 export const isMatchChat = (chat) =>
   chat?.type === "donor_match" || String(chat?.id || "").startsWith("match_");

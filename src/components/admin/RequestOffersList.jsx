@@ -148,6 +148,14 @@ const RequestOffersList = ({ requestId, requestStatus, unitsNeeded = 1 }) => {
                     <span className={`font-bold text-sm text-gray-900 ${offer.status === OfferStatus.withdrawn ? "line-through" : ""}`}>
                       {offer.donorName || "Unnamed donor"}
                     </span>
+                    {offer.donorCode && (
+                      <span
+                        className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold font-mono rounded-full"
+                        title="Anonymised code shown to the requester"
+                      >
+                        {offer.donorCode}
+                      </span>
+                    )}
                     {offer.donorBloodType && (
                       <span className="px-2 py-0.5 bg-red-100 text-[#D32F2F] text-[10px] font-bold rounded-full">
                         {offer.donorBloodType}

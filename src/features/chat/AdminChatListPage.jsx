@@ -7,7 +7,9 @@ import { bloodRequestReference } from '../../utils/references';
 
 const TABS = {
   support: { label: 'PRC Support', empty: 'No support conversations yet.' },
-  match: { label: 'Donor–Requester', empty: 'No donor–requester chats yet. They open when PRC confirms a donor.' },
+  // Retired: confirmed donors stay anonymous (DNR code) and PRC coordinates,
+  // so no new chats are opened. Older ones stay here, read-only, for records.
+  match: { label: 'Donor–Requester (archived)', empty: 'No past donor–requester chats. New ones are no longer created.' },
 };
 
 const formatTime = (ts) =>
