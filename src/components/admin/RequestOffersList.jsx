@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../../context/useAuth";
+import { useDocsById } from "../../hooks/useDocsById";
 import {
   reconcileMatchedStatus,
   subscribeToRequestOffers,
@@ -21,6 +22,24 @@ const rank = (status) =>
   isOfferPending(status) ? 0 : isOfferConfirmed(status) ? 1 : status === OfferStatus.donated ? 2 : 3;
 const millis = (ts) => (ts?.toMillis ? ts.toMillis() : 0);
 
+// Offers never store the donor's identity (the requester can read them and
+// donors stay anonymous; see offerIdentityFields() in firestore.rules), so
+// PRC reads it from donors/{donorId}. Offers made before that change may
+// still carry donorName/donorContact; those are used only as a fallback.
+const text = (value) => (value == null ? "" : String(value).trim());
+
+function offerDonorName(offer, donor) {
+  return text(donor?.fullName) || text(donor?.name) || text(offer?.donorName) || "Unnamed donor";
+}
+
+function offerDonorContact(offer, donor) {
+  for (const key of ["mobileNo", "phoneNumber", "contactNumber", "telephone"]) {
+    const value = text(donor?.[key]);
+    if (value) return value;
+  }
+  return text(offer?.donorContact) || "N/A";
+}
+
 const RequestOffersList = ({ requestId, requestStatus, unitsNeeded = 1 }) => {
   const { currentUser } = useAuth();
   const [offers, setOffers] = useState([]);
@@ -29,6 +48,7 @@ const RequestOffersList = ({ requestId, requestStatus, unitsNeeded = 1 }) => {
   const [actionError, setActionError] = useState("");
   const [busyId, setBusyId] = useState("");
   const [notice, setNotice] = useState("");
+  const donors = useDocsById("donors", offers.map((offer) => offer.donorId));
 
   useEffect(() => {
     return subscribeToRequestOffers(
@@ -146,7 +166,7 @@ const RequestOffersList = ({ requestId, requestStatus, unitsNeeded = 1 }) => {
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`font-bold text-sm text-gray-900 ${offer.status === OfferStatus.withdrawn ? "line-through" : ""}`}>
-                      {offer.donorName || "Unnamed donor"}
+                      {offerDonorName(offer, donors[offer.donorId])}
                     </span>
                     {offer.donorCode && (
                       <span
@@ -166,7 +186,7 @@ const RequestOffersList = ({ requestId, requestStatus, unitsNeeded = 1 }) => {
                     </span>
                   </div>
                   <p className="text-xs text-gray-600">
-                    Contact: <span className="font-medium text-gray-800">{offer.donorContact || "N/A"}</span>
+                    Contact: <span className="font-medium text-gray-800">{offerDonorContact(offer, donors[offer.donorId])}</span>
                   </p>
                   {offer.status === OfferStatus.withdrawn && (
                     <p className="text-[11px] text-gray-500">The donor withdrew this offer. No action needed.</p>
