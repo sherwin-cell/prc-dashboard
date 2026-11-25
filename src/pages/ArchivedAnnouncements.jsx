@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "../firebase/config";
 import { collection, getDocs, query, where, doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { LuArchive, LuRotateCcw, LuCheck, LuUsers, LuCalendar, LuEye } from "react-icons/lu";
@@ -8,22 +8,27 @@ export default function ArchivedAnnouncements() {
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState({ show: false, message: "" });
 
-  const fetchArchivedAnnouncements = async () => {
-    try {
-      setLoading(true);
-      const q = query(collection(db, "announcements"), where("status", "==", "Archived"));
-      const querySnapshot = await getDocs(q);
-      const list = querySnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
-      setArchivedAnnouncements(list);
-    } catch (error) {
-      console.error("Error fetching archived announcements:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Loads once on mount. State is only set after the read completes (and
+  // not after unmount), so the effect never sets state synchronously.
   useEffect(() => {
-    fetchArchivedAnnouncements();
+    let active = true;
+    const q = query(collection(db, "announcements"), where("status", "==", "Archived"));
+    getDocs(q)
+      .then((querySnapshot) => {
+        if (!active) return;
+        setArchivedAnnouncements(
+          querySnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+        );
+      })
+      .catch((error) => {
+        console.error("Error fetching archived announcements:", error);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const handleRestore = async (id, title) => {
